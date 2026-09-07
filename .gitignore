@@ -1,0 +1,9 @@
+# Runtime output - regenerated on every run, and holds customer file paths
+OneDriveRepairToolkit/logs/*.log
+OneDriveRepairToolkit/reports/*.csv
+OneDriveRepairToolkit/reports/*.json
+
+# Tenant-specific configuration and exported certificates
+OneDriveRepairToolkit/config/toolkit-config.json
+OneDriveRepairToolkit/config/*.cer
+OneDriveRepairToolkit/config/*.pfx

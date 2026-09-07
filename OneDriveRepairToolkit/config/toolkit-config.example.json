@@ -1,0 +1,17 @@
+{
+  "TenantId": "contoso.onmicrosoft.com",
+  "AppId": "00000000-0000-0000-0000-000000000000",
+  "CertificateThumbprint": "0123456789ABCDEF0123456789ABCDEF01234567",
+  "CertificateSubject": "OneDrive Repair Toolkit",
+  "CertificatePath": "config/OneDrive-Repair-Toolkit.cer",
+  "TargetUserId": "user@contoso.com",
+  "DownloadPath": "D:\\OneDriveRepair\\cloud-copy",
+  "LocalBackupPath": "D:\\OneDriveRepair\\pc-backup",
+  "RestorePointUtc": "2026-05-01T13:00:00.0000000Z",
+  "LastManifestPath": "",
+  "LastDuplicateReportPath": "",
+  "LastComparisonReportPath": "",
+  "LastReconcileReportPath": "",
+  "LogRetentionDays": 30,
+  "UpdatedUtc": ""
+}
