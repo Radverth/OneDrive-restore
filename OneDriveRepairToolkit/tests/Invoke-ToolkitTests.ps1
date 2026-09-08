@@ -183,6 +183,26 @@ Assert-That -Name 'a copy with no original and no siblings is flagged, not dropp
 Assert-That -Name 'an orphaned copy is never counted as reclaimable' `
     -Actual (($orphaned | Measure-Object -Property RecoverableBytes -Sum).Sum) -Expected 0
 
+# The originals must never appear anywhere in the scan output. Everything
+# downstream - the archive, the pending-delete list, the deletion itself - is
+# filtered from these rows, so if an original cannot get in here it cannot be
+# deleted later.
+$allReportedPaths = @($rows | ForEach-Object { $_.DuplicatePath })
+Assert-That -Name 'the original file is never listed as something to delete' `
+    -Actual (@($allReportedPaths | Where-Object { $_ -eq 'Docs/report.docx' }).Count) -Expected 0
+Assert-That -Name 'the original is named as what the copies are copies of' `
+    -Actual (@($rows | Where-Object { $_.CanonicalPath -eq 'Docs/report.docx' }).Count -gt 0) -Expected $true
+Assert-That -Name 'an unrelated ordinary file never appears at all' `
+    -Actual (@($allReportedPaths | Where-Object { $_ -eq 'Docs/Statement.pdf' }).Count) -Expected 0
+Assert-That -Name 'a canonical path is never also a path to delete' `
+    -Actual (@($rows | Where-Object { $allReportedPaths -contains $_.CanonicalPath -and $_.Classification -eq 'ExactDuplicate' } |
+              Where-Object { $_.CanonicalPath -eq 'Docs/report.docx' }).Count) -Expected 0
+
+# A group of N copies can lose at most N-1 files, because the canonical is never
+# emitted as a row - so something always survives every group.
+Assert-That -Name 'no row ever nominates a file as a duplicate of itself' `
+    -Actual (@($rows | Where-Object { $_.DuplicatePath -eq $_.CanonicalPath }).Count) -Expected 0
+
 $sizeOnly = Compare-DriveItemContent `
     -Left  ([pscustomobject]@{ Sha256 = ''; QuickXorHash = ''; Size = 10 }) `
     -Right ([pscustomobject]@{ Sha256 = ''; QuickXorHash = ''; Size = 10 })

@@ -711,20 +711,50 @@ function Invoke-DuplicateArchive {
     Write-Host ('  Failed     : {0}' -f $failed) -ForegroundColor $(if ($failed -gt 0) { 'Red' } else { 'Gray' })
     Write-Host ('  Folder     : {0}' -f $archiveRoot)
 
+    # The manifest is written now, before anything is deleted, so the archive is
+    # fully documented on disk even if the run is abandoned at the prompt below.
+    $manifestPath = Get-ToolkitReportPath -BaseName 'duplicate-archive' -Extension 'csv'
+    $archiveManifest = Join-Path $archiveRoot '_archive-manifest.csv'
+    $results | Export-Csv -LiteralPath $manifestPath -NoTypeInformation -Encoding utf8
+    $results | Export-Csv -LiteralPath $archiveManifest -NoTypeInformation -Encoding utf8
+    Set-ToolkitConfigValue -Name 'LastDuplicateArchivePath' -Value $manifestPath | Out-Null
+    Write-Host ('  Manifest   : {0}' -f $manifestPath)
+
     # Now the deletion offer, restricted to what is provably on disk.
     $eligible = @('ExactDuplicate')
     $candidates = Get-ArchiveDeletionCandidate -ArchiveResult $results -EligibleClassification $eligible
 
     if ($candidates.Count -gt 0) {
+        # Exactly what would be deleted, on disk and reviewable BEFORE the prompt.
+        # Whatever is in this file is what gets deleted - nothing else.
+        $pendingPath = Get-ToolkitReportPath -BaseName 'pending-delete' -Extension 'csv'
+        $candidates |
+            Select-Object @{N = 'FileToDelete'; E = { $_.DuplicatePath }},
+                          @{N = 'CopyOfThisFile'; E = { $_.CanonicalPath }},
+                          @{N = 'SizeBytes'; E = { $_.SizeBytes }},
+                          @{N = 'Classification'; E = { $_.Classification }},
+                          @{N = 'VerifiedBy'; E = { $_.VerifyStatus }},
+                          @{N = 'BackedUpTo'; E = { $_.LocalPath }},
+                          @{N = 'Sha256'; E = { $_.Sha256 }} |
+            Export-Csv -LiteralPath $pendingPath -NoTypeInformation -Encoding utf8
+        Copy-Item -LiteralPath $pendingPath -Destination (Join-Path $archiveRoot '_pending-delete.csv') -Force -ErrorAction SilentlyContinue
+
         Write-Host ''
         Write-Host ('  {0} archived copy/copies are hash-verified exact duplicates and could now' -f $candidates.Count) -ForegroundColor Cyan
         Write-Host '  be deleted from OneDrive. Everything else stays where it is.' -ForegroundColor Cyan
+        Write-Host ''
+        Write-Host '  THE EXACT LIST OF FILES THAT WOULD BE DELETED IS HERE:' -ForegroundColor Yellow
+        Write-Host ('    {0}' -f $pendingPath) -ForegroundColor Yellow
+        Write-Host '  Each row names the copy to delete and the original it is a copy of.' -ForegroundColor Gray
+        Write-Host '  Open it and check it before answering. Nothing outside that file is' -ForegroundColor Gray
+        Write-Host '  touched, and the originals are never in it.' -ForegroundColor Gray
 
         if ($failed -gt 0) {
             Write-ToolkitLog ('{0} copy/copies failed to archive and are excluded from deletion.' -f $failed) -Level WARN
         }
 
-        if (Confirm-ToolkitAction -Prompt ('Delete those {0} verified copies from OneDrive?' -f $candidates.Count)) {
+        Write-Host ''
+        if (Confirm-ToolkitAction -Prompt ('Delete the {0} file(s) listed in that CSV from OneDrive?' -f $candidates.Count)) {
             $typed = Read-ToolkitValue -Prompt 'Type DELETE in capitals to confirm' -AllowEmpty
             if ($typed -ceq 'DELETE') {
                 $toDelete = @()
@@ -762,16 +792,14 @@ function Invoke-DuplicateArchive {
         Write-ToolkitLog 'No archived copy is both hash-verified and classified as an exact duplicate, so nothing is offered for deletion.' -Level INFO
     }
 
-    # The manifest lives with the archive so the USB copy explains itself, and in
-    # reports/ so the run is recorded alongside everything else.
-    $manifestPath = Get-ToolkitReportPath -BaseName 'duplicate-archive' -Extension 'csv'
+    # Rewrite the manifest so DeleteStatus reflects what actually happened. It was
+    # already written before the prompt, so an abandoned run still leaves a record.
     $results | Export-Csv -LiteralPath $manifestPath -NoTypeInformation -Encoding utf8
-    $results | Export-Csv -LiteralPath (Join-Path $archiveRoot '_archive-manifest.csv') -NoTypeInformation -Encoding utf8
-    Set-ToolkitConfigValue -Name 'LastDuplicateArchivePath' -Value $manifestPath | Out-Null
+    $results | Export-Csv -LiteralPath $archiveManifest -NoTypeInformation -Encoding utf8
 
     Write-Host ''
     Write-Host ('  Manifest   : {0}' -f $manifestPath)
-    Write-Host ('  Also saved : {0}' -f (Join-Path $archiveRoot '_archive-manifest.csv'))
+    Write-Host ('  Also saved : {0}' -f $archiveManifest)
     Write-Host ''
     Write-Host '  To restore later: the archive keeps each file at its original relative' -ForegroundColor DarkGray
     Write-Host '  path, so the folder can be pointed at as the local backup in stage 4,' -ForegroundColor DarkGray

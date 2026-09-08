@@ -306,6 +306,22 @@ Deletion is further restricted to `ExactDuplicate` rows and still needs a
 confirm plus typing `DELETE`, so a verified `ContentConflict` or `OrphanedCopy`
 is archived but never auto-deleted.
 
+**Before the delete prompt** the toolkit writes `pending-delete-<timestamp>.csv`
+listing exactly the files it would remove — one row per file, naming the copy and
+the original it is a copy of, its size, how it was verified, and where the backup
+landed. The prompt points at that path and waits. Whatever is in that file is
+what gets deleted; nothing else is touched. The full archive manifest is written
+before the prompt too, so abandoning the run still leaves a complete record.
+
+**How the originals are kept out.** The scanner groups each conflict copy around
+the file it came from, and the canonical file — the original — is held separately
+from the list of copies and is never emitted as a row. Everything downstream
+filters those rows, so an original cannot reach the archive, the pending-delete
+list, or the deletion. Where no original survives, the *oldest* member of the
+group becomes canonical and is excluded the same way, so every group always keeps
+at least one file. Deletion is then further narrowed to `ExactDuplicate` rows,
+which require a hash match against that canonical.
+
 The archive keeps each file at its **original relative path**, so restoring means
 either copying files back by hand, or pointing stage 4 at the archive folder as
 the local backup root and letting stage 5 upload. The manifest is written twice —
@@ -367,7 +383,7 @@ disagree about what counts as duplicate noise.
 pwsh ./OneDriveRepairToolkit/tests/Invoke-ToolkitTests.ps1
 ```
 
-107 assertions covering the conflict-pattern matching, duplicate grouping and
+112 assertions covering the conflict-pattern matching, duplicate grouping and
 classification, the archive-then-delete gate, recycle bin classification and
 restore ordering, path safety, config round-tripping, and a full stage 4
 comparison run against throwaway folders on disk. The SharePoint JWT client
