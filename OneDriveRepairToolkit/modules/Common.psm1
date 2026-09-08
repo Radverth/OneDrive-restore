@@ -1086,13 +1086,12 @@ function Get-ConflictNameInfo {
 
     $patterns = @(
         @{ Type = 'ConflictedCopy'; Confidence = 'High';   Regex = '^(?<base>.+?)[\s_-]*\((?<marker>[^)]*conflicted copy[^)]*)\)\s*$' }
-        @{ Type = 'CopySuffix';     Confidence = 'High';   Regex = '^(?<base>.+?)\s*[-_]\s*(?<marker>Copy(?:\s*\(\d{1,4}\))?)\s*$' }
-        # "report copy.docx" / "report copy 2.docx" - the space-separated form, with
-        # no dash. Medium, because plenty of legitimate documents genuinely end in
-        # the word copy ("Certified copy.pdf"), so this only counts as a conflict
-        # when the file it would be a copy OF actually exists beside it. That also
-        # means the last remaining version of something is never treated as debris.
-        @{ Type = 'CopyWordSuffix'; Confidence = 'Medium'; Regex = '^(?<base>.+?)\s+(?<marker>copy(?:\s*\(?\d{1,4}\)?)?)\s*$' }
+        # The dashed form only: "report - Copy.docx", "report-Copy.docx",
+        # "report - Copy (2).docx", "report - Copy 2.docx". A separator is required.
+        # The space-only form ("report copy.docx") is deliberately NOT matched: the
+        # dash is what makes the name unambiguous, and without it plenty of ordinary
+        # documents ("Certified copy.pdf") would be caught by mistake.
+        @{ Type = 'CopySuffix';     Confidence = 'High';   Regex = '^(?<base>.+?)\s*[-_]\s*(?<marker>Copy(?:\s*\(?\d{1,4}\)?)?)\s*$' }
         @{ Type = 'NumberedCopy';   Confidence = 'High';   Regex = '^(?<base>.+?)\s*\((?<marker>\d{1,4})\)\s*$' }
         @{ Type = 'UserMachineSuffix'; Confidence = 'Medium'; Regex = '^(?<base>.+?)-(?<marker>[A-Za-z0-9._'']+-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)$' }
         @{ Type = 'MachineSuffix';  Confidence = 'Medium'; Regex = '^(?<base>.+?)-(?<marker>[A-Za-z0-9][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)$' }

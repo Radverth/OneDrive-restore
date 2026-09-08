@@ -137,16 +137,15 @@ comparisons rather than Graph's quickXorHash). It matches the usual conflict
 naming shapes:
 
 - `filename (1).ext`, `filename (2).ext` …
-- `filename-Copy.ext`, `filename - Copy.ext`
-- `filename copy.ext`, `filename copy 2.ext`, `filename copy (3).ext`
+- `filename - Copy.ext`, `filename-Copy.ext`, `filename - Copy (2).ext`,
+  `filename - Copy 2.ext`
 - `filename (user's conflicted copy 2026-04-02).ext`
 - `filename-PCNAME.ext` and `filename-user-PCNAME.ext`
 
-The space-separated `filename copy.ext` form is treated as a conflict only when
-the file it would be a copy *of* exists beside it, because plenty of legitimate
-documents genuinely end in that word — `Certified copy.pdf` is a real filename,
-not debris. The dashed `- Copy` form needs no such check. That rule also means
-the last surviving version of something is never written off as a duplicate.
+Copy names must carry the **dash** (or an underscore). The space-only form,
+`filename copy.ext`, is deliberately not matched: the dash is what makes the name
+unambiguously a copy, and without it ordinary documents get caught by mistake —
+`Certified copy.pdf` is a real filename, not debris.
 
 Candidates are grouped around the file they were copied from and classified:
 
@@ -395,7 +394,7 @@ disagree about what counts as duplicate noise.
 pwsh ./OneDriveRepairToolkit/tests/Invoke-ToolkitTests.ps1
 ```
 
-129 assertions covering the conflict-pattern matching, duplicate grouping and
+126 assertions covering the conflict-pattern matching, duplicate grouping and
 classification, the archive-then-delete gate, recycle bin classification and
 restore ordering, path safety, config round-tripping, and a full stage 4
 comparison run against throwaway folders on disk. The SharePoint JWT client

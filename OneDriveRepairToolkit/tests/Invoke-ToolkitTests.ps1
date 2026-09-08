@@ -95,25 +95,24 @@ Assert-That -Name 'copy suffix is a candidate'          -Actual $copy.IsCandidat
 Assert-That -Name 'copy suffix base name'               -Actual $copy.BaseName    -Expected 'Plan.docx'
 Assert-That -Name 'copy suffix pattern type'            -Actual $copy.PatternType -Expected 'CopySuffix'
 
-$wordCopy = Get-ConflictNameInfo -Name 'Plan copy.docx'
-Assert-That -Name 'a space-separated "copy" suffix is a candidate' -Actual $wordCopy.IsCandidate -Expected $true
-Assert-That -Name 'space-separated copy base name'                -Actual $wordCopy.BaseName    -Expected 'Plan.docx'
-Assert-That -Name 'space-separated copy pattern type'             -Actual $wordCopy.PatternType -Expected 'CopyWordSuffix'
-Assert-That -Name 'space-separated copy needs the original present' -Actual $wordCopy.RequiresOriginal -Expected $true
+$dashCopyNumbered = Get-ConflictNameInfo -Name 'Plan - Copy 2.docx'
+Assert-That -Name 'a dashed "- Copy 2" suffix is a candidate' -Actual $dashCopyNumbered.IsCandidate -Expected $true
+Assert-That -Name 'dashed "- Copy 2" base name'               -Actual $dashCopyNumbered.BaseName    -Expected 'Plan.docx'
 
-$wordCopyNumbered = Get-ConflictNameInfo -Name 'Plan copy 2.docx'
-Assert-That -Name 'a numbered "copy 2" suffix is a candidate' -Actual $wordCopyNumbered.IsCandidate -Expected $true
-Assert-That -Name 'numbered "copy 2" base name'               -Actual $wordCopyNumbered.BaseName    -Expected 'Plan.docx'
+$dashCopyParens = Get-ConflictNameInfo -Name 'Plan - Copy (3).docx'
+Assert-That -Name 'dashed "- Copy (3)" base name' -Actual $dashCopyParens.BaseName -Expected 'Plan.docx'
 
-$wordCopyParens = Get-ConflictNameInfo -Name 'Plan copy (3).docx'
-Assert-That -Name '"copy (3)" base name' -Actual $wordCopyParens.BaseName -Expected 'Plan.docx'
+$tightDashCopy = Get-ConflictNameInfo -Name 'Plan-Copy.docx'
+Assert-That -Name 'a dash with no spaces still matches' -Actual $tightDashCopy.BaseName -Expected 'Plan.docx'
 
-$dashCopyStillHigh = Get-ConflictNameInfo -Name 'Plan - Copy.docx'
-Assert-That -Name 'the dashed "- Copy" form stays high confidence' -Actual $dashCopyStillHigh.Confidence -Expected 'High'
+Assert-That -Name 'the dashed "- Copy" form is high confidence' `
+    -Actual (Get-ConflictNameInfo -Name 'Plan - Copy.docx').Confidence -Expected 'High'
 
-$legitCopy = Get-ConflictNameInfo -Name 'Certified copy.pdf'
-Assert-That -Name 'a legitimate "... copy" name still needs its original' `
-    -Actual $legitCopy.RequiresOriginal -Expected $true
+# The space-only form is deliberately not matched as a copy: the dash is what
+# makes the name unambiguous, and ordinary documents do end in that word.
+$spaceCopy = Get-ConflictNameInfo -Name 'Certified copy.pdf'
+Assert-That -Name 'a space-separated "copy" is not treated as a copy suffix' `
+    -Actual ($spaceCopy.PatternType -eq 'CopySuffix') -Expected $false
 
 $conflicted = Get-ConflictNameInfo -Name "Notes (tom's conflicted copy 2026-04-02).md"
 Assert-That -Name 'conflicted copy is a candidate'      -Actual $conflicted.IsCandidate -Expected $true
@@ -176,7 +175,7 @@ $catalogue = @(
     New-CatalogueEntry -Path 'Docs/orphan (2).txt'                  -Size 100  -Hash 'EEE' -Created '2026-01-07T00:00:00Z'
     New-CatalogueEntry -Path 'Docs/orphan (3).txt'                  -Size 100  -Hash 'EEE' -Created '2026-01-08T00:00:00Z'
     New-CatalogueEntry -Path 'Docs/lonely (1).txt'                  -Size 300  -Hash 'FFF' -Created '2026-01-09T00:00:00Z'
-    New-CatalogueEntry -Path 'Docs/Statement copy.pdf'              -Size 500  -Hash 'DDD' -Created '2026-01-10T00:00:00Z'
+    New-CatalogueEntry -Path 'Docs/Statement - Copy.pdf'            -Size 500  -Hash 'DDD' -Created '2026-01-10T00:00:00Z'
     New-CatalogueEntry -Path 'Docs/Certified copy.pdf'              -Size 700  -Hash 'GGG' -Created '2026-01-11T00:00:00Z'
 )
 
@@ -206,9 +205,9 @@ Assert-That -Name 'a copy with no original and no siblings is flagged, not dropp
 Assert-That -Name 'an orphaned copy is never counted as reclaimable' `
     -Actual (($orphaned | Measure-Object -Property RecoverableBytes -Sum).Sum) -Expected 0
 
-Assert-That -Name '"Statement copy.pdf" is caught, since Statement.pdf is beside it' `
-    -Actual (@($exact | Where-Object { $_.DuplicatePath -eq 'Docs/Statement copy.pdf' }).Count) -Expected 1
-Assert-That -Name '"Certified copy.pdf" is left alone - no "Certified.pdf" exists' `
+Assert-That -Name '"Statement - Copy.pdf" is caught as a duplicate of Statement.pdf' `
+    -Actual (@($exact | Where-Object { $_.DuplicatePath -eq 'Docs/Statement - Copy.pdf' }).Count) -Expected 1
+Assert-That -Name '"Certified copy.pdf" is left alone - no dash, so not a copy name' `
     -Actual (@($rows | Where-Object { $_.DuplicatePath -eq 'Docs/Certified copy.pdf' }).Count) -Expected 0
 
 # The originals must never appear anywhere in the scan output. Everything
