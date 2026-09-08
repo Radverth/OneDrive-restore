@@ -272,6 +272,13 @@ function Invoke-RecycleBinInventory {
 
     Write-ToolkitHeader 'OneDrive Recycle Bin Inventory'
 
+    Write-Host ''
+    Write-Host '  WHAT THIS DOES' -ForegroundColor Cyan
+    Write-Host '  Lists what is in the user''s recycle bin and works out which items look' -ForegroundColor Gray
+    Write-Host '  worth recovering, as opposed to conflict copies that were meant to go.' -ForegroundColor Gray
+    Write-Host '  Read-only: nothing is restored, deleted or changed. Use option 7 to' -ForegroundColor Gray
+    Write-Host '  actually download the files.' -ForegroundColor Gray
+
     if (-not (Connect-ToolkitGraph)) { return $null }
 
     $config = Get-ToolkitConfig
@@ -824,6 +831,14 @@ function Invoke-RecycleBinDownload {
     )
 
     Write-ToolkitHeader 'Download Recycle Bin Contents'
+
+    Write-Host ''
+    Write-Host '  WHAT THIS DOES' -ForegroundColor Cyan
+    Write-Host '  Saves deleted files to a folder on this PC. OneDrive will not hand over' -ForegroundColor Gray
+    Write-Host '  a deleted file directly, so each one is restored to the drive, then' -ForegroundColor Gray
+    Write-Host '  downloaded, then deleted again - one file at a time, so an account that' -ForegroundColor Gray
+    Write-Host '  is already over quota does not fill up. You will see the full plan, and' -ForegroundColor Gray
+    Write-Host '  how much space it needs, before anything happens.' -ForegroundColor Gray
 
     if (-not (Connect-ToolkitGraph)) { return $null }
     $config = Get-ToolkitConfig

@@ -329,6 +329,14 @@ function Invoke-DuplicateScan {
 
     Write-ToolkitHeader 'Stage 3 - Duplicate / Conflict File Scanner'
 
+    Write-Host ''
+    Write-Host '  WHAT THIS DOES' -ForegroundColor Cyan
+    Write-Host '  Looks for sync-conflict copies such as "report (1).docx" and lists them,' -ForegroundColor Gray
+    Write-Host '  separating the ones that are provably identical to the file they came' -ForegroundColor Gray
+    Write-Host '  from, from the ones that need a human decision.' -ForegroundColor Gray
+    Write-Host '  The scan only reads. You see the full list before anything is deleted,' -ForegroundColor Gray
+    Write-Host '  and deleting is a separate step you have to ask for.' -ForegroundColor Gray
+
     $config = Get-ToolkitConfig
     $manifestPath = [string]$config['LastManifestPath']
 
@@ -816,6 +824,14 @@ function Invoke-DuplicateArchiveFromReport {
     )
 
     Write-ToolkitHeader 'Archive Duplicate Copies - Download, then Optionally Delete'
+
+    Write-Host ''
+    Write-Host '  WHAT THIS DOES' -ForegroundColor Cyan
+    Write-Host '  Downloads every duplicate copy found by option 3 to a folder you choose' -ForegroundColor Gray
+    Write-Host '  (a USB drive is the point), then checks each file arrived intact.' -ForegroundColor Gray
+    Write-Host '  Only after that does it offer to delete them from OneDrive - and only' -ForegroundColor Gray
+    Write-Host '  the ones it could verify. A copy that failed to download is never' -ForegroundColor Gray
+    Write-Host '  deleted, so you always keep something to restore from.' -ForegroundColor Gray
 
     # Fail fast like the other stages, rather than asking for a report first and
     # only then discovering there is no way to reach the drive.

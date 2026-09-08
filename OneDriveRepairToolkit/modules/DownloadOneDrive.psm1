@@ -144,6 +144,12 @@ function Invoke-OneDriveDownload {
 
     Write-ToolkitHeader 'Stage 2 - Download Cloud Copy of OneDrive (post-rollback)'
 
+    Write-Host ''
+    Write-Host '  WHAT THIS DOES' -ForegroundColor Cyan
+    Write-Host '  Copies the whole of the user''s OneDrive to a folder on this PC, so you' -ForegroundColor Gray
+    Write-Host '  have a trustworthy picture of what the cloud actually holds right now.' -ForegroundColor Gray
+    Write-Host '  Nothing in OneDrive is changed, moved or deleted.' -ForegroundColor Gray
+
     if (-not (Connect-ToolkitGraph)) { return $null }
 
     $config = Get-ToolkitConfig

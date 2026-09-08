@@ -280,6 +280,37 @@ function Get-ToolkitConfigValue {
 # Console helpers
 # ---------------------------------------------------------------------------
 
+function Get-ToolkitReadiness {
+    <#
+    .SYNOPSIS
+        Works out which stages are ready to run, from what the config already holds.
+    .DESCRIPTION
+        Drives the "needs option N first" hints on the menu, so an operator can see
+        what is and is not usable yet without running a stage to find out.
+    #>
+    [CmdletBinding()]
+    param($Config)
+
+    if (-not $Config) { $Config = Get-ToolkitConfig }
+
+    function Test-ConfiguredPath {
+        param([string]$Value)
+        return (-not [string]::IsNullOrWhiteSpace($Value)) -and (Test-Path -LiteralPath $Value)
+    }
+
+    return [pscustomobject]@{
+        Registered         = (-not [string]::IsNullOrWhiteSpace([string]$Config['AppId'])) -and
+                             (-not [string]::IsNullOrWhiteSpace([string]$Config['CertificateThumbprint']))
+        TargetUserSet      = -not [string]::IsNullOrWhiteSpace([string]$Config['TargetUserId'])
+        RestorePointSet    = -not [string]::IsNullOrWhiteSpace([string]$Config['RestorePointUtc'])
+        HasCloudCopy       = Test-ConfiguredPath -Value ([string]$Config['DownloadPath'])
+        HasManifest        = Test-ConfiguredPath -Value ([string]$Config['LastManifestPath'])
+        HasLocalBackup     = Test-ConfiguredPath -Value ([string]$Config['LocalBackupPath'])
+        HasDuplicateReport = Test-ConfiguredPath -Value ([string]$Config['LastDuplicateReportPath'])
+        HasComparison      = Test-ConfiguredPath -Value ([string]$Config['LastComparisonReportPath'])
+    }
+}
+
 function Write-ToolkitHeader {
     [CmdletBinding()]
     param([Parameter(Mandatory)][string]$Title)
@@ -1059,6 +1090,7 @@ Export-ModuleMember -Function @(
     'Save-ToolkitConfig'
     'Set-ToolkitConfigValue'
     'Get-ToolkitConfigValue'
+    'Get-ToolkitReadiness'
     'Write-ToolkitHeader'
     'Read-ToolkitValue'
     'Confirm-ToolkitAction'

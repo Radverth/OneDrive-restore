@@ -499,6 +499,40 @@ Assert-Throws -Name 'a missing report path is rejected' `
     -Action { Import-DuplicateScanReport -Path (Join-Path $sandbox 'nope.csv') }
 
 Write-Host ''
+Write-Host 'Menu readiness hints' -ForegroundColor Cyan
+
+$blank = Get-ToolkitReadiness -Config (@{
+    AppId = ''; CertificateThumbprint = ''; TargetUserId = ''; RestorePointUtc = ''
+    DownloadPath = ''; LastManifestPath = ''; LocalBackupPath = ''
+    LastDuplicateReportPath = ''; LastComparisonReportPath = ''
+})
+Assert-That -Name 'a blank config is not registered'      -Actual $blank.Registered    -Expected $false
+Assert-That -Name 'a blank config has no cloud copy'      -Actual $blank.HasCloudCopy  -Expected $false
+Assert-That -Name 'a blank config has no comparison'      -Actual $blank.HasComparison -Expected $false
+
+# A path that is recorded but no longer on disk must not count as ready - otherwise
+# the menu would offer a stage whose input has been moved or deleted.
+$goneReady = Get-ToolkitReadiness -Config (@{
+    AppId = 'app'; CertificateThumbprint = 'thumb'; TargetUserId = 'u@x.com'; RestorePointUtc = '2026-05-01T00:00:00Z'
+    DownloadPath = (Join-Path $sandbox 'does-not-exist'); LastManifestPath = ''
+    LocalBackupPath = ''; LastDuplicateReportPath = ''; LastComparisonReportPath = ''
+})
+Assert-That -Name 'a certificate plus app id counts as registered' -Actual $goneReady.Registered   -Expected $true
+Assert-That -Name 'a recorded path that no longer exists is not ready' -Actual $goneReady.HasCloudCopy -Expected $false
+Assert-That -Name 'a set restore point is detected'        -Actual $goneReady.RestorePointSet -Expected $true
+
+$liveReady = Get-ToolkitReadiness -Config (@{
+    AppId = 'app'; CertificateThumbprint = 'thumb'; TargetUserId = 'u@x.com'; RestorePointUtc = ''
+    DownloadPath = $cloudRoot; LastManifestPath = $manifestFile; LocalBackupPath = $backupRoot
+    LastDuplicateReportPath = $scanReportPath; LastComparisonReportPath = $comparison.ReportPath
+})
+Assert-That -Name 'an existing cloud copy folder is ready'  -Actual $liveReady.HasCloudCopy       -Expected $true
+Assert-That -Name 'an existing backup folder is ready'      -Actual $liveReady.HasLocalBackup     -Expected $true
+Assert-That -Name 'an existing scan report is ready'        -Actual $liveReady.HasDuplicateReport -Expected $true
+Assert-That -Name 'an existing comparison report is ready'  -Actual $liveReady.HasComparison      -Expected $true
+Assert-That -Name 'an unset restore point is reported unset' -Actual $liveReady.RestorePointSet   -Expected $false
+
+Write-Host ''
 Write-Host 'Config round-trip' -ForegroundColor Cyan
 
 Set-ToolkitConfigValue -Name 'TargetUserId' -Value 'user@contoso.com' | Out-Null

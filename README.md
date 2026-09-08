@@ -61,8 +61,22 @@ cd OneDriveRepairToolkit
 ./Start-OneDriveRepair.ps1
 ```
 
-The menu remembers what it already knows — tenant, app, certificate, target
-user, restore point, and the last-used folders — and shows it above the prompt.
+Every menu entry says in plain English what it does and, more importantly, what
+it changes. Each option carries one of these tags:
+
+| Tag | Meaning |
+|---|---|
+| `[reads only]` | Nothing is changed anywhere |
+| `[writes to this PC]` | Files are written locally; OneDrive is untouched |
+| `[CHANGES ONEDRIVE]` | Will modify the user's OneDrive |
+| `[this PC + CAN CHANGE ONEDRIVE]` | Writes locally, and can change OneDrive if you confirm |
+
+Options whose prerequisites are not met say so instead of failing later —
+"Needs option 2 first — no downloaded copy on record". Every stage then opens
+with a **WHAT THIS DOES** block restating its effect before it asks for anything.
+
+The menu also remembers what it already knows — tenant, app, certificate, target
+user, restore point, and the last-used folders — and shows it below the options.
 Any single stage can also be run directly, for repeat runs or scripting:
 
 ```powershell
@@ -352,7 +366,7 @@ disagree about what counts as duplicate noise.
 pwsh ./OneDriveRepairToolkit/tests/Invoke-ToolkitTests.ps1
 ```
 
-96 assertions covering the conflict-pattern matching, duplicate grouping and
+107 assertions covering the conflict-pattern matching, duplicate grouping and
 classification, the archive-then-delete gate, recycle bin classification and
 restore ordering, path safety, config round-tripping, and a full stage 4
 comparison run against throwaway folders on disk. The SharePoint JWT client

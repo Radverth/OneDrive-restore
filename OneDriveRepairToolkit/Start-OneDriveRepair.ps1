@@ -66,10 +66,7 @@ function Show-ToolkitStatus {
 
     $config = Get-ToolkitConfig
 
-    $registered = -not [string]::IsNullOrWhiteSpace([string]$config['AppId']) -and
-                  -not [string]::IsNullOrWhiteSpace([string]$config['CertificateThumbprint'])
-
-    $restorePoint = 'not set'
+    $restorePoint = 'not set yet'
     if (-not [string]::IsNullOrWhiteSpace([string]$config['RestorePointUtc'])) {
         $parsed = [datetime]::MinValue
         if ([datetime]::TryParse([string]$config['RestorePointUtc'], [ref]$parsed)) {
@@ -77,36 +74,140 @@ function Show-ToolkitStatus {
         }
     }
 
+    function Format-Setting {
+        param([string]$Value)
+        if ([string]::IsNullOrWhiteSpace($Value)) { return 'not set yet' }
+        return $Value
+    }
+
     Write-Host ''
-    Write-Host '  Current configuration' -ForegroundColor DarkCyan
-    Write-Host ('    App registration : {0}' -f $(if ($registered) { 'configured (app ' + $config['AppId'] + ')' } else { 'not configured - run option 1' })) `
-        -ForegroundColor $(if ($registered) { 'Gray' } else { 'Yellow' })
-    Write-Host ('    Target user      : {0}' -f $(if ([string]::IsNullOrWhiteSpace([string]$config['TargetUserId'])) { 'not set' } else { $config['TargetUserId'] }))
-    Write-Host ('    Restore point    : {0}' -f $restorePoint)
-    Write-Host ('    Cloud copy       : {0}' -f $(if ([string]::IsNullOrWhiteSpace([string]$config['DownloadPath'])) { 'not set' } else { $config['DownloadPath'] }))
-    Write-Host ('    Local backup     : {0}' -f $(if ([string]::IsNullOrWhiteSpace([string]$config['LocalBackupPath'])) { 'not set' } else { $config['LocalBackupPath'] }))
-    Write-Host ('    Log file         : {0}' -f (Get-ToolkitContext).LogPath)
+    Write-Host ('-' * 78) -ForegroundColor DarkGray
+    Write-Host '  Remembered from last time (every option lets you change these):' -ForegroundColor DarkCyan
+    Write-Host ('    User being repaired : {0}' -f (Format-Setting ([string]$config['TargetUserId'])))
+    Write-Host ('    Rolled back to      : {0}' -f $restorePoint)
+    Write-Host ('    Cloud copy saved in : {0}' -f (Format-Setting ([string]$config['DownloadPath'])))
+    Write-Host ('    PC backup folder    : {0}' -f (Format-Setting ([string]$config['LocalBackupPath'])))
+    Write-Host ('    Log for this run    : {0}' -f (Get-ToolkitContext).LogPath) -ForegroundColor DarkGray
+}
+
+function Write-MenuItem {
+    <#
+    .SYNOPSIS
+        Renders one menu entry: number, title, effect tag, description, and any blocker.
+    .DESCRIPTION
+        The tag is the important part. An operator should never have to guess whether
+        an option only reads, writes to this PC, or can change the user's OneDrive.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$Number,
+        [Parameter(Mandatory)][string]$Title,
+        [Parameter(Mandatory)][ValidateSet('safe', 'local', 'onedrive', 'both', 'setup')][string]$Effect,
+        [Parameter(Mandatory)][string]$Description,
+        [string]$Note,
+        [string]$Blocker
+    )
+
+    $tag = switch ($Effect) {
+        'safe'     { '[reads only]' }
+        'local'    { '[writes to this PC]' }
+        'onedrive' { '[CHANGES ONEDRIVE]' }
+        'both'     { '[this PC + CAN CHANGE ONEDRIVE]' }
+        'setup'    { '[one-time setup]' }
+    }
+    $tagColour = switch ($Effect) {
+        'onedrive' { 'Red' }
+        'both'     { 'Yellow' }
+        default    { 'DarkGray' }
+    }
+
+    # Title left, tag right-aligned to column 78.
+    $left = '  {0,2}  {1}' -f $Number, $Title
+    $pad = [math]::Max(1, 78 - $left.Length - $tag.Length)
+    Write-Host $left -NoNewline -ForegroundColor White
+    Write-Host (' ' * $pad) -NoNewline
+    Write-Host $tag -ForegroundColor $tagColour
+
+    Write-Host ('       {0}' -f $Description) -ForegroundColor Gray
+    if ($Note) { Write-Host ('       {0}' -f $Note) -ForegroundColor DarkGray }
+    if ($Blocker) { Write-Host ('       -> {0}' -f $Blocker) -ForegroundColor Yellow }
 }
 
 function Show-ToolkitMenu {
     [CmdletBinding()]
     param()
 
+    $ready = Get-ToolkitReadiness
+    $config = Get-ToolkitConfig
+
     Write-Host ''
-    Write-Host '================================================================' -ForegroundColor DarkCyan
-    Write-Host '   OneDrive Sync Repair & Reconciliation Toolkit' -ForegroundColor Cyan
-    Write-Host '================================================================' -ForegroundColor DarkCyan
+    Write-Host ('=' * 78) -ForegroundColor DarkCyan
+    Write-Host '  OneDrive Sync Repair & Reconciliation Toolkit' -ForegroundColor Cyan
+    Write-Host '  The drive rollback itself is done by hand in the OneDrive admin centre.' -ForegroundColor DarkGray
+    Write-Host '  This toolkit does everything that comes after it.' -ForegroundColor DarkGray
+    Write-Host ('=' * 78) -ForegroundColor DarkCyan
+
     Write-Host ''
-    Write-Host '   1. Register Azure AD App & Generate Certificate (one-time)'
-    Write-Host '   2. Download Cloud Copy of User''s OneDrive (post-rollback)'
-    Write-Host '   3. Scan OneDrive for Duplicate/Conflict Files'
-    Write-Host '   4. Compare Downloaded OneDrive Copy vs. Local PC Backup'
-    Write-Host '   5. Reconcile - Upload Missing/Newer Canonical Files'
-    Write-Host '   6. Inventory the OneDrive Recycle Bin'
-    Write-Host '   7. Download Recycle Bin Contents (restores, downloads, puts back)'
-    Write-Host '   8. Archive Duplicate Copies - Download, then Optionally Delete'
-    Write-Host '   9. View Last Run Log'
-    Write-Host '  10. Exit'
+    Write-Host '  SETUP' -ForegroundColor Cyan
+    Write-MenuItem -Number '1' -Effect 'setup' `
+        -Title 'Register Azure AD app and certificate' `
+        -Description 'Creates the app-only login that options 2-8 use. Run once, as an admin.' `
+        -Note $(if ($ready.Registered) { 'Already done: app {0}' -f $config['AppId'] } else { 'Not done yet - start here.' })
+
+    Write-Host ''
+    Write-Host '  STEP 1 - SEE WHAT IS ACTUALLY IN THE CLOUD' -ForegroundColor Cyan
+    Write-MenuItem -Number '2' -Effect 'local' `
+        -Title 'Download a copy of the user''s OneDrive' `
+        -Description 'Copies the whole drive to a folder you choose, and lists what it found.' `
+        -Note 'Run this after the rollback. Nothing on OneDrive is changed.' `
+        -Blocker $(if (-not $ready.Registered) { 'Needs option 1 first.' })
+
+    Write-MenuItem -Number '3' -Effect 'both' `
+        -Title 'Find duplicate and sync-conflict files' `
+        -Description 'Finds copies like "report (1).docx" and lists them for you.' `
+        -Note 'The scan changes nothing. Deleting is a separate, confirmed step.' `
+        -Blocker $(if (-not $ready.Registered) { 'Needs option 1 first.' })
+
+    Write-Host ''
+    Write-Host '  STEP 2 - WORK OUT WHAT THE ROLLBACK LOST' -ForegroundColor Cyan
+    Write-MenuItem -Number '4' -Effect 'local' `
+        -Title 'Compare the cloud copy against the PC backup' `
+        -Description 'Finds the real work the rollback removed, by comparing the two.' `
+        -Note 'Reads both folders and writes a report. Nothing is uploaded.' `
+        -Blocker $(if (-not $ready.HasCloudCopy) { 'Needs option 2 first - no downloaded copy on record.' })
+
+    Write-MenuItem -Number '5' -Effect 'onedrive' `
+        -Title 'Put the recovered files back' `
+        -Description 'Uploads ONLY the files option 4 confirmed as genuine missing work.' `
+        -Note 'Offers a dry run first. Never uploads the whole backup.' `
+        -Blocker $(if (-not $ready.HasComparison) { 'Needs option 4 first - no comparison report on record.' })
+
+    Write-Host ''
+    Write-Host '  RECOVERING DELETED FILES AND KEEPING BACKUPS' -ForegroundColor Cyan
+    Write-MenuItem -Number '6' -Effect 'safe' `
+        -Title 'List what is in the recycle bin' `
+        -Description 'Shows what was deleted and flags what looks worth getting back.' `
+        -Note 'Read-only. Changes nothing, anywhere.' `
+        -Blocker $(if (-not $ready.Registered) { 'Needs option 1 first.' })
+
+    Write-MenuItem -Number '7' -Effect 'both' `
+        -Title 'Download the files in the recycle bin' `
+        -Description 'Saves deleted files to a folder on this PC.' `
+        -Note 'Restores each file, downloads it, deletes it again - one at a time.' `
+        -Blocker $(if (-not $ready.Registered) { 'Needs option 1 first.' })
+
+    Write-MenuItem -Number '8' -Effect 'both' `
+        -Title 'Back up the duplicate copies to a folder' `
+        -Description 'Downloads every copy found by option 3 - e.g. onto a USB stick.' `
+        -Note 'Checks each arrived intact, then offers to delete only those.' `
+        -Blocker $(if (-not $ready.HasDuplicateReport) { 'Needs option 3 first - no scan report on record.' })
+
+    Write-Host ''
+    Write-Host '  OTHER' -ForegroundColor Cyan
+    Write-MenuItem -Number '9' -Effect 'safe' `
+        -Title 'View the log from this run' `
+        -Description 'Shows what the toolkit has done, newest last.'
+    Write-Host '  10  Exit' -ForegroundColor White
 }
 
 function Show-LastRunLog {
