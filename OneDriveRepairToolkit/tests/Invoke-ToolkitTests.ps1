@@ -323,6 +323,125 @@ Assert-That -Name 'classification basis is downgraded without a manifest' `
     -Actual ($patternRows[0].ClassificationBasis) -Expected 'PatternOnly'
 
 Write-Host ''
+Write-Host 'Recycle bin download - path mapping and selection' -ForegroundColor Cyan
+
+Assert-That -Name 'DirName strips the personal site and library prefix' `
+    -Actual (ConvertTo-DriveRelativePathFromDirName -DirName 'personal/tom_contoso_com/Documents/Projects' -LeafName 'plan.docx') `
+    -Expected 'Projects/plan.docx'
+Assert-That -Name 'a root-level DirName maps to a bare filename' `
+    -Actual (ConvertTo-DriveRelativePathFromDirName -DirName 'personal/tom_contoso_com/Documents' -LeafName 'plan.docx') `
+    -Expected 'plan.docx'
+Assert-That -Name 'DirName without a library segment drops the personal prefix' `
+    -Actual (ConvertTo-DriveRelativePathFromDirName -DirName 'personal/tom_contoso_com/Sub' -LeafName 'a.txt') `
+    -Expected 'Sub/a.txt'
+
+function New-SpBinItem {
+    param($Name, $Dir = 'personal/tom_contoso_com/Documents', $Type = 1, $Size = 100)
+    return [pscustomobject]@{
+        Id           = 'sp-' + ($Name -replace '[^A-Za-z0-9]', '')
+        Name         = $Name
+        Title        = $Name
+        DirName      = $Dir
+        RelativePath = ConvertTo-DriveRelativePathFromDirName -DirName $Dir -LeafName $Name
+        Size         = $Size
+        DeletedDate  = '2026-04-02T09:00:00Z'
+        DeletedBy    = 'Admin'
+        ItemType     = $Type
+        ItemState    = 1
+    }
+}
+
+$spItems = @(
+    New-SpBinItem -Name 'deep.txt' -Dir 'personal/tom_contoso_com/Documents/A/B'
+    New-SpBinItem -Name 'shallow.txt'
+    New-SpBinItem -Name 'A' -Dir 'personal/tom_contoso_com/Documents' -Type 5
+    New-SpBinItem -Name 'oldversion.txt' -Type 2   # a file version, not a file
+    New-SpBinItem -Name 'kept.txt'
+)
+
+$allTargets = Select-RecycleBinDownloadTarget -Items $spItems -Scope All -IncludeFolders
+Assert-That -Name 'file versions and list items are not download targets' `
+    -Actual (@($allTargets | Where-Object { $_.Name -eq 'oldversion.txt' }).Count) -Expected 0
+Assert-That -Name 'folders are restored before the files inside them' `
+    -Actual $allTargets[0].Name -Expected 'A'
+Assert-That -Name 'shallower files are restored before deeper ones' `
+    -Actual (($allTargets | Where-Object { $_.ItemType -eq 1 } | Select-Object -First 1).Name) -Expected 'kept.txt'
+
+$noFolders = Select-RecycleBinDownloadTarget -Items $spItems -Scope All
+Assert-That -Name 'folders are excluded unless asked for' `
+    -Actual (@($noFolders | Where-Object { $_.ItemType -eq 5 }).Count) -Expected 0
+
+$notInDrive = Select-RecycleBinDownloadTarget -Items $spItems -Scope NotInDrive -Lookup $lookup
+Assert-That -Name 'items already in the drive are excluded from NotInDrive scope' `
+    -Actual (@($notInDrive | Where-Object { $_.Name -eq 'kept.txt' }).Count) -Expected 0
+Assert-That -Name 'items missing from the drive are kept in NotInDrive scope' `
+    -Actual (@($notInDrive | Where-Object { $_.Name -eq 'shallow.txt' }).Count) -Expected 1
+
+$patterned = Select-RecycleBinDownloadTarget -Items $spItems -Scope Pattern -Pattern 'deep.*'
+Assert-That -Name 'a filename pattern narrows the selection' -Actual $patterned.Count -Expected 1
+
+Write-Host ''
+Write-Host 'SharePoint client assertion (real signing and verification)' -ForegroundColor Cyan
+
+# A throwaway self-signed certificate, generated in-process so the JWT signing
+# path is exercised for real rather than mocked.
+$rsaKey = [System.Security.Cryptography.RSA]::Create(2048)
+$certRequest = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+    'CN=ToolkitTest', $rsaKey,
+    [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+    [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
+$testCert = $certRequest.CreateSelfSigned([System.DateTimeOffset]::UtcNow.AddDays(-1), [System.DateTimeOffset]::UtcNow.AddYears(1))
+
+$appId = '11111111-2222-3333-4444-555555555555'
+$tenantId = 'contoso.onmicrosoft.com'
+$jwt = New-ClientAssertionJwt -Certificate $testCert -AppId $appId -TenantId $tenantId
+
+$parts = $jwt -split '\.'
+Assert-That -Name 'the assertion has three JWT segments' -Actual $parts.Count -Expected 3
+
+function ConvertFrom-Base64Url {
+    param([string]$Text)
+    $padded = $Text.Replace('-', '+').Replace('_', '/')
+    switch ($padded.Length % 4) { 2 { $padded += '==' } 3 { $padded += '=' } }
+    return [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($padded))
+}
+
+$header = ConvertFrom-Base64Url -Text $parts[0] | ConvertFrom-Json
+$claims = ConvertFrom-Base64Url -Text $parts[1] | ConvertFrom-Json
+
+Assert-That -Name 'the assertion is signed RS256'      -Actual $header.alg -Expected 'RS256'
+Assert-That -Name 'the header carries the cert x5t'    -Actual $header.x5t -Expected (ConvertTo-Base64Url -Bytes $testCert.GetCertHash())
+Assert-That -Name 'issuer is the application id'       -Actual $claims.iss -Expected $appId
+Assert-That -Name 'subject is the application id'      -Actual $claims.sub -Expected $appId
+Assert-That -Name 'audience is the tenant token endpoint' `
+    -Actual $claims.aud -Expected ('https://login.microsoftonline.com/{0}/oauth2/v2.0/token' -f $tenantId)
+Assert-That -Name 'the assertion has not already expired' -Actual ($claims.exp -gt [System.DateTimeOffset]::UtcNow.ToUnixTimeSeconds()) -Expected $true
+Assert-That -Name 'nbf precedes exp' -Actual ($claims.nbf -lt $claims.exp) -Expected $true
+
+# The real proof: Entra will verify this signature with the certificate's public key.
+$padding = [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+$publicKey = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($testCert)
+$signedBytes = [System.Text.Encoding]::UTF8.GetBytes(('{0}.{1}' -f $parts[0], $parts[1]))
+$sigPadded = $parts[2].Replace('-', '+').Replace('_', '/')
+switch ($sigPadded.Length % 4) { 2 { $sigPadded += '==' } 3 { $sigPadded += '=' } }
+$signatureBytes = [Convert]::FromBase64String($sigPadded)
+
+Assert-That -Name 'the signature verifies against the certificate public key' `
+    -Actual ($publicKey.VerifyData($signedBytes, $signatureBytes, [System.Security.Cryptography.HashAlgorithmName]::SHA256, $padding)) `
+    -Expected $true
+
+$tampered = [System.Text.Encoding]::UTF8.GetBytes(('{0}.{1}x' -f $parts[0], $parts[1]))
+Assert-That -Name 'a tampered assertion fails verification' `
+    -Actual ($publicKey.VerifyData($tampered, $signatureBytes, [System.Security.Cryptography.HashAlgorithmName]::SHA256, $padding)) `
+    -Expected $false
+
+Assert-That -Name 'base64url output carries no padding or unsafe characters' `
+    -Actual ((ConvertTo-Base64Url -Bytes ([byte[]](1, 2, 3, 4, 5))) -match '^[A-Za-z0-9_-]+$') -Expected $true
+
+$publicKey.Dispose()
+$rsaKey.Dispose()
+
+Write-Host ''
 Write-Host 'Config round-trip' -ForegroundColor Cyan
 
 Set-ToolkitConfigValue -Name 'TargetUserId' -Value 'user@contoso.com' | Out-Null

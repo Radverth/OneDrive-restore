@@ -22,6 +22,12 @@ $script:RequiredPermission = @(
     'User.Read.All'
 )
 
+# Office 365 SharePoint Online. Only needed to download recycle bin contents:
+# Graph cannot restore a OneDrive for Business item, so that path goes through
+# SharePoint REST, which needs its own application permission.
+$script:SharePointAppId = '00000003-0000-0ff1-ce00-000000000000'
+$script:SharePointPermission = @('Sites.FullControl.All')
+
 function Test-AppRegistrationPrerequisite {
     [CmdletBinding()]
     param()
@@ -80,6 +86,31 @@ function New-ToolkitCertificate {
     }
 }
 
+function New-ResourceAccessEntry {
+    <#
+    .SYNOPSIS
+        Maps permission names onto the application-role IDs a resource exposes.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]$ServicePrincipal,
+        [Parameter(Mandatory)][string[]]$Permission
+    )
+
+    $access = @()
+    foreach ($name in $Permission) {
+        $role = $ServicePrincipal.AppRoles |
+            Where-Object { $_.Value -eq $name -and $_.AllowedMemberTypes -contains 'Application' } |
+            Select-Object -First 1
+
+        if (-not $role) {
+            throw ('{0} does not expose an application role called {1}.' -f $ServicePrincipal.DisplayName, $name)
+        }
+        $access += @{ id = $role.Id; type = 'Role' }
+    }
+    return $access
+}
+
 function New-ToolkitAppRegistration {
     <#
     .SYNOPSIS
@@ -95,19 +126,20 @@ function New-ToolkitAppRegistration {
     param(
         [Parameter(Mandatory)][string]$DisplayName,
         [Parameter(Mandatory)]$Certificate,
-        [Parameter(Mandatory)]$GraphServicePrincipal
+        [Parameter(Mandatory)]$GraphServicePrincipal,
+        $SharePointServicePrincipal
     )
 
-    $resourceAccess = @()
-    foreach ($permission in $script:RequiredPermission) {
-        $role = $GraphServicePrincipal.AppRoles |
-            Where-Object { $_.Value -eq $permission -and $_.AllowedMemberTypes -contains 'Application' } |
-            Select-Object -First 1
+    $requiredResourceAccess = @(@{
+        ResourceAppId  = $script:GraphAppId
+        ResourceAccess = (New-ResourceAccessEntry -ServicePrincipal $GraphServicePrincipal -Permission $script:RequiredPermission)
+    })
 
-        if (-not $role) {
-            throw ('Microsoft Graph does not expose an application role called {0}.' -f $permission)
+    if ($SharePointServicePrincipal) {
+        $requiredResourceAccess += @{
+            ResourceAppId  = $script:SharePointAppId
+            ResourceAccess = (New-ResourceAccessEntry -ServicePrincipal $SharePointServicePrincipal -Permission $script:SharePointPermission)
         }
-        $resourceAccess += @{ id = $role.Id; type = 'Role' }
     }
 
     $keyCredential = @{
@@ -123,10 +155,7 @@ function New-ToolkitAppRegistration {
         -DisplayName $DisplayName `
         -SignInAudience 'AzureADMyOrg' `
         -KeyCredentials @($keyCredential) `
-        -RequiredResourceAccess @(@{
-            ResourceAppId  = $script:GraphAppId
-            ResourceAccess = $resourceAccess
-        }) `
+        -RequiredResourceAccess $requiredResourceAccess `
         -ErrorAction Stop
 
     Write-ToolkitLog ('Application created. AppId {0} (object id {1}).' -f $application.AppId, $application.Id) -Level SUCCESS
@@ -175,7 +204,8 @@ function Grant-ToolkitAdminConsent {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]$ServicePrincipal,
-        [Parameter(Mandatory)]$GraphServicePrincipal
+        [Parameter(Mandatory)]$ResourceServicePrincipal,
+        [string[]]$Permission = $script:RequiredPermission
     )
 
     $granted = @()
@@ -189,8 +219,8 @@ function Grant-ToolkitAdminConsent {
         Write-ToolkitLog ('Could not read existing role assignments: {0}' -f $_.Exception.Message) -Level WARN
     }
 
-    foreach ($permission in $script:RequiredPermission) {
-        $role = $GraphServicePrincipal.AppRoles |
+    foreach ($permission in $Permission) {
+        $role = $ResourceServicePrincipal.AppRoles |
             Where-Object { $_.Value -eq $permission -and $_.AllowedMemberTypes -contains 'Application' } |
             Select-Object -First 1
 
@@ -200,7 +230,7 @@ function Grant-ToolkitAdminConsent {
             continue
         }
 
-        if ($existingAssignment | Where-Object { $_.AppRoleId -eq $role.Id -and $_.ResourceId -eq $GraphServicePrincipal.Id }) {
+        if ($existingAssignment | Where-Object { $_.AppRoleId -eq $role.Id -and $_.ResourceId -eq $ResourceServicePrincipal.Id }) {
             Write-ToolkitLog ('{0} is already consented.' -f $permission) -Level INFO
             $granted += $permission
             continue
@@ -210,7 +240,7 @@ function Grant-ToolkitAdminConsent {
             New-MgServicePrincipalAppRoleAssignment `
                 -ServicePrincipalId $ServicePrincipal.Id `
                 -PrincipalId $ServicePrincipal.Id `
-                -ResourceId $GraphServicePrincipal.Id `
+                -ResourceId $ResourceServicePrincipal.Id `
                 -AppRoleId $role.Id `
                 -ErrorAction Stop | Out-Null
 
@@ -261,6 +291,28 @@ function Invoke-AppRegistrationSetup {
         $graphSp = Get-MgServicePrincipal -Filter ("appId eq '{0}'" -f $script:GraphAppId) -ErrorAction Stop
         if (-not $graphSp) { throw 'Could not resolve the Microsoft Graph service principal in this tenant.' }
 
+        # Downloading recycle bin contents means restoring items, and Graph cannot
+        # restore for OneDrive for Business - that path needs SharePoint REST and
+        # therefore a SharePoint application permission. It is a broad permission,
+        # so it is opt-in rather than granted by default.
+        Write-Host ''
+        Write-Host '  Downloading recycle bin CONTENTS needs one extra permission:' -ForegroundColor Gray
+        Write-Host ('    {0} on Office 365 SharePoint Online' -f ($script:SharePointPermission -join ', ')) -ForegroundColor Gray
+        Write-Host '  Without it everything else still works, including the recycle bin' -ForegroundColor Gray
+        Write-Host '  inventory - only restoring and downloading deleted files needs it.' -ForegroundColor Gray
+        Write-Host ''
+        $wantSharePoint = Confirm-ToolkitAction -Prompt 'Include the SharePoint permission?'
+
+        $sharePointSp = $null
+        if ($wantSharePoint) {
+            $sharePointSp = Get-MgServicePrincipal -Filter ("appId eq '{0}'" -f $script:SharePointAppId) -ErrorAction SilentlyContinue |
+                Select-Object -First 1
+            if (-not $sharePointSp) {
+                Write-ToolkitLog 'The SharePoint Online service principal was not found in this tenant; continuing with Graph permissions only.' -Level WARN
+                $wantSharePoint = $false
+            }
+        }
+
         $existingApp = Get-MgApplication -Filter ("displayName eq '{0}'" -f ($appName -replace "'", "''")) -ErrorAction SilentlyContinue |
             Select-Object -First 1
 
@@ -270,15 +322,36 @@ function Invoke-AppRegistrationSetup {
             Write-ToolkitLog ('An application called "{0}" already exists (AppId {1}).' -f $appName, $existingApp.AppId) -Level WARN
             if (Confirm-ToolkitAction -Prompt 'Add the new certificate to that existing registration instead of creating a new one?' -DefaultYes) {
                 Add-ToolkitAppCertificate -ApplicationObjectId $existingApp.Id -Certificate $certInfo.Certificate
+
+                # An app registered before the recycle bin download existed will not
+                # list the SharePoint resource yet, so add it on the way through.
+                if ($sharePointSp -and -not ($existingApp.RequiredResourceAccess | Where-Object { $_.ResourceAppId -eq $script:SharePointAppId })) {
+                    $updated = @()
+                    foreach ($entry in $existingApp.RequiredResourceAccess) {
+                        $updated += @{
+                            ResourceAppId  = $entry.ResourceAppId
+                            ResourceAccess = @($entry.ResourceAccess | ForEach-Object { @{ id = $_.Id; type = $_.Type } })
+                        }
+                    }
+                    $updated += @{
+                        ResourceAppId  = $script:SharePointAppId
+                        ResourceAccess = (New-ResourceAccessEntry -ServicePrincipal $sharePointSp -Permission $script:SharePointPermission)
+                    }
+                    Update-MgApplication -ApplicationId $existingApp.Id -RequiredResourceAccess $updated -ErrorAction Stop
+                    Write-ToolkitLog 'Added the SharePoint permission to the existing registration.' -Level SUCCESS
+                }
+
                 $application = Get-MgApplication -ApplicationId $existingApp.Id -ErrorAction Stop
             }
             else {
                 $appName = Read-ToolkitValue -Prompt 'New display name to use instead'
-                $application = New-ToolkitAppRegistration -DisplayName $appName -Certificate $certInfo.Certificate -GraphServicePrincipal $graphSp
+                $application = New-ToolkitAppRegistration -DisplayName $appName -Certificate $certInfo.Certificate `
+                    -GraphServicePrincipal $graphSp -SharePointServicePrincipal $sharePointSp
             }
         }
         else {
-            $application = New-ToolkitAppRegistration -DisplayName $appName -Certificate $certInfo.Certificate -GraphServicePrincipal $graphSp
+            $application = New-ToolkitAppRegistration -DisplayName $appName -Certificate $certInfo.Certificate `
+                -GraphServicePrincipal $graphSp -SharePointServicePrincipal $sharePointSp
         }
 
         $servicePrincipal = Get-MgServicePrincipal -Filter ("appId eq '{0}'" -f $application.AppId) -ErrorAction SilentlyContinue |
@@ -300,7 +373,14 @@ function Invoke-AppRegistrationSetup {
             if (-not $servicePrincipal) { throw 'Could not create the service principal for the application.' }
         }
 
-        $consent = Grant-ToolkitAdminConsent -ServicePrincipal $servicePrincipal -GraphServicePrincipal $graphSp
+        $consent = Grant-ToolkitAdminConsent -ServicePrincipal $servicePrincipal -ResourceServicePrincipal $graphSp
+
+        if ($sharePointSp) {
+            $sharePointConsent = Grant-ToolkitAdminConsent -ServicePrincipal $servicePrincipal `
+                -ResourceServicePrincipal $sharePointSp -Permission $script:SharePointPermission
+            $consent.Granted += $sharePointConsent.Granted
+            $consent.Failed += $sharePointConsent.Failed
+        }
 
         $config['TenantId'] = $tenantId
         $config['AppId'] = $application.AppId
@@ -352,5 +432,6 @@ Export-ModuleMember -Function @(
     'New-ToolkitAppRegistration'
     'Add-ToolkitAppCertificate'
     'Grant-ToolkitAdminConsent'
+    'New-ResourceAccessEntry'
     'Test-AppRegistrationPrerequisite'
 )

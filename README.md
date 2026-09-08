@@ -15,6 +15,7 @@ automates:
 | 4 | Compare that download against the local PC backup | Menu option 4 |
 | 5 | Upload only the legitimate recovered work | Menu option 5 |
 | — | Inventory the recycle bin to see what was deleted | Menu option 6 (optional, any time) |
+| — | Download the recycle bin's contents | Menu option 7 (optional, any time) |
 
 The rollback in step 0 also wipes any genuine files and edits made between the
 restore point and now. Steps 2-5 exist to find that work in a local backup of
@@ -40,6 +41,10 @@ device's sync gets dragged back into the drive.
 - **Global Administrator** for the one-time registration and consent — or
   Application Administrator + Cloud Application Administrator + Privileged Role
   Administrator between them.
+- **Only if you want to download recycle bin contents (option 7):** the
+  `Sites.FullControl.All` application permission on Office 365 SharePoint Online,
+  which stage 1 offers as an opt-in prompt, and the toolkit certificate's private
+  key present on the machine running it.
 - **The admin-centre rollback already done**, with the restore point date/time
   written down. Stage 4 asks for it and uses it to decide what counts as
   recovered work.
@@ -193,23 +198,67 @@ three cannot disagree about what counts as noise. Without a stage 2 manifest
 there is nothing to check against, so classification falls back to the filename
 alone and every row records that in `ClassificationBasis`.
 
+This stage is read-only and needs no permission beyond the `Sites.ReadWrite.All`
+stage 1 already grants. Listing the bin is a **beta** endpoint
+(`GET /beta/sites/{siteId}/recycleBin/items`). To download the files themselves,
+use option 7.
+
 Report: `reports/recycle-bin-inventory-<timestamp>.csv`.
 
-> **What this stage cannot do, and why.** Recycle bin *contents* cannot be
-> downloaded. A Graph `recycleBinItem` carries only `id`, `name`, `size`,
-> `deletedDateTime` and `deletedFromLocation` — there is no content stream and no
-> `@microsoft.graph.downloadUrl` at any API version. Listing the bin is itself
-> **beta-only** (`GET /beta/sites/{siteId}/recycleBin/items`), though it needs no
-> permission beyond the `Sites.ReadWrite.All` stage 1 already grants.
->
-> The only route to the bytes is to restore an item first, and
-> [`driveItem: restore`](https://learn.microsoft.com/en-us/graph/api/driveitem-restore?view=graph-rest-1.0)
-> is documented as OneDrive **Personal** only. For OneDrive for Business, restore
-> means the SharePoint REST endpoint `POST {siteUrl}/_api/web/recyclebin('{id}')/restore()`,
-> which needs a SharePoint-audience token and a SharePoint application permission
-> this toolkit does not request. So this stage reports; restoring is done in the
-> web UI, after which stage 2 will pull the restored files down with everything
-> else.
+### 7. Download recycle bin contents (optional)
+
+Downloads the actual files out of the recycle bin, to a local folder, with the
+original folder structure and timestamps.
+
+**This route is indirect, and it has to be.** A Graph `recycleBinItem` carries
+only `id`, `name`, `size`, `deletedDateTime` and `deletedFromLocation` — there is
+no content stream and no `@microsoft.graph.downloadUrl` at any API version, so
+recycle bin content cannot be read directly. The only way to reach the bytes is
+to restore the item first, and
+[`driveItem: restore`](https://learn.microsoft.com/en-us/graph/api/driveitem-restore?view=graph-rest-1.0)
+is documented as OneDrive **Personal** only. For OneDrive for Business, restore
+means the SharePoint REST endpoint
+[`POST {siteUrl}/_api/web/RecycleBin('{id}')/restore()`](https://learn.microsoft.com/en-us/answers/questions/355675/sharepoint-rest-api-for-recycle-bin).
+
+So each file goes through three steps:
+
+1. **Restore** it through SharePoint REST.
+2. **Download** it through Graph as an ordinary driveItem.
+3. **Delete it again**, so it returns to the recycle bin and the drive is left as
+   it was found.
+
+That happens **one file at a time**. On an account that is already over quota,
+restoring the whole bin at once could push it further over; doing it per file
+holds at most one restored file in the drive at any moment, and the plan screen
+shows that peak (the largest single file) before you confirm. Answering "no" to
+the put-back question leaves everything restored instead — the plan screen warns
+when that exceeds the remaining quota.
+
+You can download everything, only items that are not in the drive now (using the
+stage 2 manifest), or only names matching a pattern. Folders are restored before
+the files inside them, and a file already brought back by its parent folder is
+detected and downloaded without a second restore.
+
+Two extra requirements, both called out at runtime if missing:
+
+- **A SharePoint application permission** (`Sites.FullControl.All` on Office 365
+  SharePoint Online), which stage 1 offers as an opt-in prompt. Re-run stage 1 on
+  an existing registration and it will add the permission without disturbing
+  anything else. Everything else in the toolkit works without it.
+- **The certificate's private key on this machine.** SharePoint REST rejects
+  client-secret app-only tokens, so the toolkit signs a JWT client assertion with
+  the same certificate stage 1 created, and exchanges it for a
+  SharePoint-audience token.
+
+Reports: `reports/recycle-bin-download-<timestamp>.csv`, plus a copy inside the
+download folder. Every row records `RestoreStatus`, `DownloadStatus` and
+`PutBackStatus`, so a file that was downloaded but could not be deleted again is
+visible rather than silently left consuming quota.
+
+> Two caveats worth knowing. Files put back start a **fresh retention window** and
+> reappear as new bin entries with new IDs and a new deleted date. And a restore
+> fails if something already occupies the original path — that is reported per
+> item and the run continues.
 
 ## Safety rules baked into the design
 
@@ -241,7 +290,7 @@ OneDriveRepairToolkit/
 │   ├── DuplicateScanner.psm1       # stage 3
 │   ├── CompareDrives.psm1          # stage 4
 │   ├── ReconcileUpload.psm1        # stage 5
-│   └── RecycleBin.psm1             # recycle bin inventory (menu option 6)
+│   └── RecycleBin.psm1             # recycle bin inventory + download (options 6-7)
 ├── config/
 │   ├── toolkit-config.json         # written at runtime (gitignored)
 │   └── toolkit-config.example.json
@@ -262,9 +311,13 @@ disagree about what counts as duplicate noise.
 pwsh ./OneDriveRepairToolkit/tests/Invoke-ToolkitTests.ps1
 ```
 
-62 assertions covering the conflict-pattern matching, duplicate grouping and
-classification, recycle bin classification, path safety, config round-tripping,
-and a full stage 4 comparison run against throwaway folders on disk. No tenant, no Graph modules,
+83 assertions covering the conflict-pattern matching, duplicate grouping and
+classification, recycle bin classification and restore ordering, path safety,
+config round-tripping, and a full stage 4 comparison run against throwaway
+folders on disk. The SharePoint JWT client assertion is signed with a
+generated certificate and its signature verified against the public key — the
+same check Entra performs — including a negative case proving a tampered
+assertion fails. No tenant, no Graph modules,
 no network — it runs anywhere PowerShell 7 does.
 
 ## Troubleshooting
@@ -289,6 +342,17 @@ SHA256-backed comparisons.
 **The recycle bin inventory fails or returns nothing** — the listing endpoint is
 beta-only and is not enabled in every tenant. The bin is always readable in the
 OneDrive web UI as a fallback.
+
+**"Could not authenticate to SharePoint" on option 7** — the app registration
+does not carry the SharePoint permission yet. Re-run stage 1 and answer yes to
+the SharePoint prompt; it adds the permission to the existing registration
+without disturbing the certificate or the Graph permissions. If the certificate
+itself cannot be found, option 7 must run on the machine that holds its private
+key.
+
+**A restore fails with a conflict** — something already occupies the file's
+original path, so SharePoint will not restore over it. The item is reported with
+that error and the run continues; deal with those individually.
 
 **The certificate expires** — `Add-ToolkitAppCertificate` adds a new certificate
 to the existing registration without disturbing the old one; update

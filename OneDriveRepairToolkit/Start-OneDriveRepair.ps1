@@ -16,6 +16,8 @@
       5. Upload just those canonical files back, without recreating duplicates.
       6. Inventory the recycle bin to see what was deleted and what is worth
          recovering by hand (optional, run at any point).
+      7. Download the recycle bin's contents, by restoring each item, downloading
+         it, and putting it back (optional; needs the SharePoint permission).
 
     This script is a thin dispatcher - all the logic lives in modules/.
 
@@ -34,7 +36,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateRange(1, 7)][int]$Stage,
+    [ValidateRange(1, 8)][int]$Stage,
     [string]$ConfigPath
 )
 
@@ -99,8 +101,9 @@ function Show-ToolkitMenu {
     Write-Host '   4. Compare Downloaded OneDrive Copy vs. Local PC Backup'
     Write-Host '   5. Reconcile - Upload Missing/Newer Canonical Files'
     Write-Host '   6. Inventory the OneDrive Recycle Bin'
-    Write-Host '   7. View Last Run Log'
-    Write-Host '   8. Exit'
+    Write-Host '   7. Download Recycle Bin Contents (restores, downloads, puts back)'
+    Write-Host '   8. View Last Run Log'
+    Write-Host '   9. Exit'
 }
 
 function Show-LastRunLog {
@@ -157,7 +160,8 @@ function Invoke-ToolkitStage {
         4 { Invoke-DriveComparison | Out-Null }
         5 { Invoke-Reconciliation | Out-Null }
         6 { Invoke-RecycleBinInventory | Out-Null }
-        7 { Show-LastRunLog }
+        7 { Invoke-RecycleBinDownload | Out-Null }
+        8 { Show-LastRunLog }
         default { Write-Host '  Not a valid choice.' -ForegroundColor Yellow }
     }
 }
@@ -183,9 +187,9 @@ while ($true) {
     Show-ToolkitStatus
     Write-Host ''
 
-    $choice = (Read-Host '   Choose an option [1-8]').Trim()
+    $choice = (Read-Host '   Choose an option [1-9]').Trim()
 
-    if ($choice -in @('8', 'q', 'Q', 'exit')) {
+    if ($choice -in @('9', 'q', 'Q', 'exit')) {
         Write-ToolkitLog '=== Toolkit exited ===' -Level INFO -NoConsole
         Write-Host ''
         Write-Host '  Goodbye.' -ForegroundColor Cyan
@@ -193,8 +197,8 @@ while ($true) {
     }
 
     $number = 0
-    if (-not [int]::TryParse($choice, [ref]$number) -or $number -lt 1 -or $number -gt 7) {
-        Write-Host '  Please choose a number between 1 and 8.' -ForegroundColor Yellow
+    if (-not [int]::TryParse($choice, [ref]$number) -or $number -lt 1 -or $number -gt 8) {
+        Write-Host '  Please choose a number between 1 and 9.' -ForegroundColor Yellow
         continue
     }
 
