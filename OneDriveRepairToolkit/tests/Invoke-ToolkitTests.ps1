@@ -77,7 +77,7 @@ $global:OneDriveRepairContext = [ordered]@{
 }
 
 $moduleRoot = Join-Path $repoRoot 'modules'
-foreach ($module in @('Common', 'DownloadOneDrive', 'DuplicateScanner', 'CompareDrives', 'ReconcileUpload')) {
+foreach ($module in @('Common', 'DownloadOneDrive', 'DuplicateScanner', 'CompareDrives', 'ReconcileUpload', 'RecycleBin')) {
     Import-Module (Join-Path $moduleRoot ('{0}.psm1' -f $module)) -Force -DisableNameChecking
 }
 
@@ -256,6 +256,71 @@ Assert-That -Name 'conflict copy with no original goes to review, not skip' `
     -Actual (Get-Category 'Docs/lonely (1).txt') -Expected 'DuplicatePatternNoOriginal'
 Assert-That -Name 'exactly one file is queued for upload'   -Actual $comparison.UploadCount -Expected 1
 Assert-That -Name 'comparison report was written'           -Actual (Test-Path -LiteralPath $comparison.ReportPath) -Expected $true
+
+Write-Host ''
+Write-Host 'Recycle bin inventory' -ForegroundColor Cyan
+
+$binPath = ConvertTo-RecycleBinPath -DeletedFromLocation 'Documents/Projects' -Name 'plan.docx'
+Assert-That -Name 'deleted-from location rebuilds a full path' -Actual $binPath.Path        -Expected 'Documents/Projects/plan.docx'
+Assert-That -Name 'the library prefix is trimmed for matching' -Actual $binPath.TrimmedPath -Expected 'Projects/plan.docx'
+
+$rootPath = ConvertTo-RecycleBinPath -DeletedFromLocation '' -Name 'loose.txt'
+Assert-That -Name 'a root-level deletion rebuilds cleanly' -Actual $rootPath.Path -Expected 'loose.txt'
+
+function New-BinItem {
+    param($Name, $Location = 'Documents', $Size = 100)
+    return [pscustomobject]@{
+        Id                  = 'bin-' + ($Name -replace '[^A-Za-z0-9]', '')
+        Name                = $Name
+        Size                = $Size
+        DeletedDateTime     = '2026-04-02T09:00:00Z'
+        DeletedFromLocation = $Location
+        DeletedBy           = 'Admin'
+    }
+}
+
+# A manifest of what the drive holds right now.
+$manifestFile = Join-Path $sandbox 'manifest.csv'
+@(
+    [pscustomobject]@{ RelativePath = 'report.docx';  Name = 'report.docx' }
+    [pscustomobject]@{ RelativePath = 'kept.txt';     Name = 'kept.txt' }
+) | Export-Csv -LiteralPath $manifestFile -NoTypeInformation -Encoding utf8
+
+$lookup = Get-DriveManifestLookup -ManifestPath $manifestFile
+Assert-That -Name 'manifest lookup loads paths' -Actual $lookup.Paths.Count -Expected 2
+
+$binItems = @(
+    New-BinItem -Name 'report-DESKTOP-4F2K9L1.docx'   # original is in the drive -> debris
+    New-BinItem -Name 'kept.txt'                      # already back in the drive
+    New-BinItem -Name 'gone-forever.xlsx' -Size 5000  # genuinely missing -> recoverable
+    New-BinItem -Name 'orphan (1).pdf'                # copy whose original is nowhere
+)
+
+$binRows = ConvertTo-RecycleBinReportRow -Items $binItems -Lookup $lookup
+function Get-BinClass { param($Name) ($binRows | Where-Object { $_.Name -eq $Name } | Select-Object -First 1).Classification }
+
+Assert-That -Name 'deleted conflict copy is debris when the original is back' `
+    -Actual (Get-BinClass 'report-DESKTOP-4F2K9L1.docx') -Expected 'ConflictCopyDeleted'
+Assert-That -Name 'item already back in the drive is not flagged for recovery' `
+    -Actual (Get-BinClass 'kept.txt') -Expected 'AlreadyBackInDrive'
+Assert-That -Name 'item missing from the drive is a recoverable candidate' `
+    -Actual (Get-BinClass 'gone-forever.xlsx') -Expected 'RecoverableCandidate'
+Assert-That -Name 'deleted copy whose original is nowhere is surfaced, not written off' `
+    -Actual (Get-BinClass 'orphan (1).pdf') -Expected 'RecoverableCandidate'
+Assert-That -Name 'classification records that a manifest was used' `
+    -Actual ($binRows[0].ClassificationBasis) -Expected 'ManifestChecked'
+
+# With no manifest there is nothing to check against, and the report says so.
+$emptyLookup = Get-DriveManifestLookup -ManifestPath ''
+$patternRows = ConvertTo-RecycleBinReportRow -Items $binItems -Lookup $emptyLookup
+function Get-PatternClass { param($Name) ($patternRows | Where-Object { $_.Name -eq $Name } | Select-Object -First 1).Classification }
+
+Assert-That -Name 'without a manifest a high-confidence copy is still debris' `
+    -Actual (Get-PatternClass 'orphan (1).pdf') -Expected 'ConflictCopyDeleted'
+Assert-That -Name 'without a manifest an ordinary file is recoverable' `
+    -Actual (Get-PatternClass 'kept.txt') -Expected 'RecoverableCandidate'
+Assert-That -Name 'classification basis is downgraded without a manifest' `
+    -Actual ($patternRows[0].ClassificationBasis) -Expected 'PatternOnly'
 
 Write-Host ''
 Write-Host 'Config round-trip' -ForegroundColor Cyan

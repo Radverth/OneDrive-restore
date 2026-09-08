@@ -14,6 +14,8 @@
       4. Compare that download against the local PC backup to find the
          legitimate work done since the restore point.
       5. Upload just those canonical files back, without recreating duplicates.
+      6. Inventory the recycle bin to see what was deleted and what is worth
+         recovering by hand (optional, run at any point).
 
     This script is a thin dispatcher - all the logic lives in modules/.
 
@@ -32,7 +34,7 @@
 
 [CmdletBinding()]
 param(
-    [ValidateRange(1, 6)][int]$Stage,
+    [ValidateRange(1, 7)][int]$Stage,
     [string]$ConfigPath
 )
 
@@ -40,7 +42,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 $moduleRoot = Join-Path $PSScriptRoot 'modules'
-foreach ($module in @('Common', 'AppRegistration', 'DownloadOneDrive', 'DuplicateScanner', 'CompareDrives', 'ReconcileUpload')) {
+foreach ($module in @('Common', 'AppRegistration', 'DownloadOneDrive', 'DuplicateScanner', 'CompareDrives', 'ReconcileUpload', 'RecycleBin')) {
     Import-Module (Join-Path $moduleRoot ('{0}.psm1' -f $module)) -Force -DisableNameChecking
 }
 
@@ -96,8 +98,9 @@ function Show-ToolkitMenu {
     Write-Host '   3. Scan OneDrive for Duplicate/Conflict Files'
     Write-Host '   4. Compare Downloaded OneDrive Copy vs. Local PC Backup'
     Write-Host '   5. Reconcile - Upload Missing/Newer Canonical Files'
-    Write-Host '   6. View Last Run Log'
-    Write-Host '   7. Exit'
+    Write-Host '   6. Inventory the OneDrive Recycle Bin'
+    Write-Host '   7. View Last Run Log'
+    Write-Host '   8. Exit'
 }
 
 function Show-LastRunLog {
@@ -153,7 +156,8 @@ function Invoke-ToolkitStage {
         3 { Invoke-DuplicateScan | Out-Null }
         4 { Invoke-DriveComparison | Out-Null }
         5 { Invoke-Reconciliation | Out-Null }
-        6 { Show-LastRunLog }
+        6 { Invoke-RecycleBinInventory | Out-Null }
+        7 { Show-LastRunLog }
         default { Write-Host '  Not a valid choice.' -ForegroundColor Yellow }
     }
 }
@@ -179,9 +183,9 @@ while ($true) {
     Show-ToolkitStatus
     Write-Host ''
 
-    $choice = (Read-Host '   Choose an option [1-7]').Trim()
+    $choice = (Read-Host '   Choose an option [1-8]').Trim()
 
-    if ($choice -in @('7', 'q', 'Q', 'exit')) {
+    if ($choice -in @('8', 'q', 'Q', 'exit')) {
         Write-ToolkitLog '=== Toolkit exited ===' -Level INFO -NoConsole
         Write-Host ''
         Write-Host '  Goodbye.' -ForegroundColor Cyan
@@ -189,8 +193,8 @@ while ($true) {
     }
 
     $number = 0
-    if (-not [int]::TryParse($choice, [ref]$number) -or $number -lt 1 -or $number -gt 6) {
-        Write-Host '  Please choose a number between 1 and 7.' -ForegroundColor Yellow
+    if (-not [int]::TryParse($choice, [ref]$number) -or $number -lt 1 -or $number -gt 7) {
+        Write-Host '  Please choose a number between 1 and 8.' -ForegroundColor Yellow
         continue
     }
 

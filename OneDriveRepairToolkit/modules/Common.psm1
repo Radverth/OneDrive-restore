@@ -172,6 +172,7 @@ function New-ToolkitConfigObject {
         LastManifestPath         = ''
         LastDuplicateReportPath  = ''
         LastComparisonReportPath = ''
+        LastRecycleBinReportPath = ''
         LastReconcileReportPath  = ''
         LogRetentionDays         = 30
         UpdatedUtc               = ''

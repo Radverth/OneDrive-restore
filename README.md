@@ -14,6 +14,7 @@ automates:
 | 3 | Scan for duplicate/conflict files, optionally clean up | Menu option 3 |
 | 4 | Compare that download against the local PC backup | Menu option 4 |
 | 5 | Upload only the legitimate recovered work | Menu option 5 |
+| — | Inventory the recycle bin to see what was deleted | Menu option 6 (optional, any time) |
 
 The rollback in step 0 also wipes any genuine files and edits made between the
 restore point and now. Steps 2-5 exist to find that work in a local backup of
@@ -173,6 +174,43 @@ something a client can force.
 There is a dry run: answer "no" to *Upload for real?* to get the full plan
 written to `reports/reconcile-dryrun-<timestamp>.csv` with nothing changed.
 
+### 6. Inventory the OneDrive recycle bin (optional)
+
+Lists everything in the user's first-stage recycle bin and splits it into what
+matters and what does not, cross-referencing the stage 2 manifest so "is this
+already back in the drive?" is answered from data rather than guessed:
+
+| Classification | Meaning |
+|---|---|
+| `RecoverableCandidate` | Not in the current drive — restore by hand if still wanted |
+| `PossiblyBackInDrive` | Same filename exists elsewhere in the drive — check first |
+| `AlreadyBackInDrive` | A file with this path is in the drive now — nothing to do |
+| `ConflictCopyDeleted` | Sync-conflict copy; deleting it was the point |
+
+A conflict-named item is only written off as debris when the file it was copied
+from is actually in the drive now — the same rule stages 3 and 4 use, so the
+three cannot disagree about what counts as noise. Without a stage 2 manifest
+there is nothing to check against, so classification falls back to the filename
+alone and every row records that in `ClassificationBasis`.
+
+Report: `reports/recycle-bin-inventory-<timestamp>.csv`.
+
+> **What this stage cannot do, and why.** Recycle bin *contents* cannot be
+> downloaded. A Graph `recycleBinItem` carries only `id`, `name`, `size`,
+> `deletedDateTime` and `deletedFromLocation` — there is no content stream and no
+> `@microsoft.graph.downloadUrl` at any API version. Listing the bin is itself
+> **beta-only** (`GET /beta/sites/{siteId}/recycleBin/items`), though it needs no
+> permission beyond the `Sites.ReadWrite.All` stage 1 already grants.
+>
+> The only route to the bytes is to restore an item first, and
+> [`driveItem: restore`](https://learn.microsoft.com/en-us/graph/api/driveitem-restore?view=graph-rest-1.0)
+> is documented as OneDrive **Personal** only. For OneDrive for Business, restore
+> means the SharePoint REST endpoint `POST {siteUrl}/_api/web/recyclebin('{id}')/restore()`,
+> which needs a SharePoint-audience token and a SharePoint application permission
+> this toolkit does not request. So this stage reports; restoring is done in the
+> web UI, after which stage 2 will pull the restored files down with everything
+> else.
+
 ## Safety rules baked into the design
 
 - **No blind re-upload of the backup.** Only files proven newer than the restore
@@ -202,7 +240,8 @@ OneDriveRepairToolkit/
 │   ├── DownloadOneDrive.psm1       # stage 2
 │   ├── DuplicateScanner.psm1       # stage 3
 │   ├── CompareDrives.psm1          # stage 4
-│   └── ReconcileUpload.psm1        # stage 5
+│   ├── ReconcileUpload.psm1        # stage 5
+│   └── RecycleBin.psm1             # recycle bin inventory (menu option 6)
 ├── config/
 │   ├── toolkit-config.json         # written at runtime (gitignored)
 │   └── toolkit-config.example.json
@@ -223,9 +262,9 @@ disagree about what counts as duplicate noise.
 pwsh ./OneDriveRepairToolkit/tests/Invoke-ToolkitTests.ps1
 ```
 
-50 assertions covering the conflict-pattern matching, duplicate grouping and
-classification, path safety, config round-tripping, and a full stage 4
-comparison run against throwaway folders on disk. No tenant, no Graph modules,
+62 assertions covering the conflict-pattern matching, duplicate grouping and
+classification, recycle bin classification, path safety, config round-tripping,
+and a full stage 4 comparison run against throwaway folders on disk. No tenant, no Graph modules,
 no network — it runs anywhere PowerShell 7 does.
 
 ## Troubleshooting
@@ -246,6 +285,10 @@ The toolkit honours `Retry-After` and backs off; let it run.
 **Stage 3 reports many `ProbableDuplicate` rows** — Graph did not return hashes
 for those files. Run stage 2 first, then re-scan using the manifest to get
 SHA256-backed comparisons.
+
+**The recycle bin inventory fails or returns nothing** — the listing endpoint is
+beta-only and is not enabled in every tenant. The bin is always readable in the
+OneDrive web UI as a fallback.
 
 **The certificate expires** — `Add-ToolkitAppCertificate` adds a new certificate
 to the existing registration without disturbing the old one; update
