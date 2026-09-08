@@ -331,11 +331,13 @@ function Invoke-DuplicateScan {
 
     Write-Host ''
     Write-Host '  WHAT THIS DOES' -ForegroundColor Cyan
-    Write-Host '  Looks for sync-conflict copies such as "report (1).docx" and lists them,' -ForegroundColor Gray
-    Write-Host '  separating the ones that are provably identical to the file they came' -ForegroundColor Gray
-    Write-Host '  from, from the ones that need a human decision.' -ForegroundColor Gray
+    Write-Host '  Looks for the sync error files - duplicate and conflict copies such as' -ForegroundColor Gray
+    Write-Host '  "report (1).docx" - and lists them, separating the ones provably' -ForegroundColor Gray
+    Write-Host '  identical to the file they came from, from the ones needing a decision.' -ForegroundColor Gray
     Write-Host '  The scan only reads. You see the full list before anything is deleted,' -ForegroundColor Gray
     Write-Host '  and deleting is a separate step you have to ask for.' -ForegroundColor Gray
+    Write-Host '  To download them to a USB drive before deleting, use option 8 (or pick' -ForegroundColor Gray
+    Write-Host '  that as the next step when this scan finishes).' -ForegroundColor Gray
 
     $config = Get-ToolkitConfig
     $manifestPath = [string]$config['LastManifestPath']
@@ -428,8 +430,9 @@ function Invoke-DuplicateScan {
 
         Write-Host ''
         Write-Host '  What next?'
-        Write-Host '    1. Download the copies to a folder first, then choose whether to delete (recommended)'
-        Write-Host '    2. Delete the exact duplicates without keeping a local copy'
+        Write-Host '    1. Download these sync error files to a folder (e.g. a USB drive),'
+        Write-Host '       then choose whether to delete them from OneDrive  (recommended)'
+        Write-Host '    2. Delete the exact duplicates now, without keeping a local copy'
         Write-Host '    3. Nothing - the reports are on disk'
         Write-Host ''
         $nextAction = Read-ToolkitValue -Prompt 'Choice' -Default '1'
@@ -823,12 +826,13 @@ function Invoke-DuplicateArchiveFromReport {
         [string]$ReportPath
     )
 
-    Write-ToolkitHeader 'Archive Duplicate Copies - Download, then Optionally Delete'
+    Write-ToolkitHeader 'Download Sync Error Files, then Delete Them from OneDrive'
 
     Write-Host ''
     Write-Host '  WHAT THIS DOES' -ForegroundColor Cyan
-    Write-Host '  Downloads every duplicate copy found by option 3 to a folder you choose' -ForegroundColor Gray
-    Write-Host '  (a USB drive is the point), then checks each file arrived intact.' -ForegroundColor Gray
+    Write-Host '  Downloads every sync error file found by option 3 - the duplicate and' -ForegroundColor Gray
+    Write-Host '  conflict copies the broken sync created - to a folder you choose (a USB' -ForegroundColor Gray
+    Write-Host '  drive is the point), then checks each file arrived intact.' -ForegroundColor Gray
     Write-Host '  Only after that does it offer to delete them from OneDrive - and only' -ForegroundColor Gray
     Write-Host '  the ones it could verify. A copy that failed to download is never' -ForegroundColor Gray
     Write-Host '  deleted, so you always keep something to restore from.' -ForegroundColor Gray

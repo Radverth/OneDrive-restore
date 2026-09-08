@@ -16,7 +16,7 @@ automates:
 | 5 | Upload only the legitimate recovered work | Menu option 5 |
 | — | Inventory the recycle bin to see what was deleted | Menu option 6 (optional, any time) |
 | — | Download the recycle bin's contents | Menu option 7 (optional, any time) |
-| — | Archive the duplicate copies to a USB drive, then optionally delete | Menu option 8 (optional, any time) |
+| — | Download the sync error files to a USB drive, then delete them | Menu option 8 (optional, any time) |
 
 The rollback in step 0 also wipes any genuine files and edits made between the
 restore point and now. Steps 2-5 exist to find that work in a local backup of
@@ -275,11 +275,12 @@ visible rather than silently left consuming quota.
 > fails if something already occupies the original path — that is reported per
 > item and the run continues.
 
-### 8. Archive duplicate copies — download, then optionally delete (optional)
+### 8. Download the sync error files, then delete them (optional)
 
-Downloads every copy the scanner flagged to a local folder (a USB drive is the
-point), verifies each one landed intact, writes a CSV manifest, and only then
-offers to delete the verified ones from OneDrive.
+Downloads every sync error file the scanner flagged — the duplicate and conflict
+copies the broken sync created — to a local folder (a USB drive is the point),
+verifies each one landed intact, writes a CSV manifest, and only then offers to
+delete the verified ones from OneDrive.
 
 This is the answer to "I want something I can restore from if this goes wrong."
 Deleting straight from the drive leaves the OneDrive recycle bin as the only way

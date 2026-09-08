@@ -105,6 +105,7 @@ function Write-MenuItem {
         [Parameter(Mandatory)][ValidateSet('safe', 'local', 'onedrive', 'both', 'setup')][string]$Effect,
         [Parameter(Mandatory)][string]$Description,
         [string]$Note,
+        [string]$Extra,
         [string]$Blocker
     )
 
@@ -130,6 +131,7 @@ function Write-MenuItem {
 
     Write-Host ('       {0}' -f $Description) -ForegroundColor Gray
     if ($Note) { Write-Host ('       {0}' -f $Note) -ForegroundColor DarkGray }
+    if ($Extra) { Write-Host ('       {0}' -f $Extra) -ForegroundColor DarkGray }
     if ($Blocker) { Write-Host ('       -> {0}' -f $Blocker) -ForegroundColor Yellow }
 }
 
@@ -163,9 +165,10 @@ function Show-ToolkitMenu {
         -Blocker $(if (-not $ready.Registered) { 'Needs option 1 first.' })
 
     Write-MenuItem -Number '3' -Effect 'both' `
-        -Title 'Find duplicate and sync-conflict files' `
-        -Description 'Finds copies like "report (1).docx" and lists them for you.' `
-        -Note 'The scan changes nothing. Deleting is a separate, confirmed step.' `
+        -Title 'Find the sync error files' `
+        -Description 'Finds the duplicate and conflict copies the broken sync made,' `
+        -Note 'like "report (1).docx". The scan itself changes nothing - to save' `
+        -Extra 'them to a USB drive before deleting, use option 8.' `
         -Blocker $(if (-not $ready.Registered) { 'Needs option 1 first.' })
 
     Write-Host ''
@@ -183,7 +186,7 @@ function Show-ToolkitMenu {
         -Blocker $(if (-not $ready.HasComparison) { 'Needs option 4 first - no comparison report on record.' })
 
     Write-Host ''
-    Write-Host '  RECOVERING DELETED FILES AND KEEPING BACKUPS' -ForegroundColor Cyan
+    Write-Host '  CLEANING UP AND RECOVERING DELETED FILES' -ForegroundColor Cyan
     Write-MenuItem -Number '6' -Effect 'safe' `
         -Title 'List what is in the recycle bin' `
         -Description 'Shows what was deleted and flags what looks worth getting back.' `
@@ -197,9 +200,9 @@ function Show-ToolkitMenu {
         -Blocker $(if (-not $ready.Registered) { 'Needs option 1 first.' })
 
     Write-MenuItem -Number '8' -Effect 'both' `
-        -Title 'Back up the duplicate copies to a folder' `
-        -Description 'Downloads every copy found by option 3 - e.g. onto a USB stick.' `
-        -Note 'Checks each arrived intact, then offers to delete only those.' `
+        -Title 'Download sync error files, then delete' `
+        -Description 'Saves every copy option 3 found to a folder - e.g. a USB stick.' `
+        -Note 'Then offers to delete them from OneDrive - only ones that saved OK.' `
         -Blocker $(if (-not $ready.HasDuplicateReport) { 'Needs option 3 first - no scan report on record.' })
 
     Write-Host ''
