@@ -827,7 +827,8 @@ function Invoke-RecycleBinDownload {
     param(
         [string]$UserId,
         [string]$Destination,
-        [switch]$KeepRestored
+        [switch]$KeepRestored,
+        [int]$BatchLimit = 0
     )
 
     Write-ToolkitHeader 'Download Recycle Bin Contents'
@@ -915,6 +916,10 @@ function Invoke-RecycleBinDownload {
         Write-ToolkitLog 'Nothing in the recycle bin matches that selection.' -Level WARN
         return $null
     }
+
+    # Offer a trial batch: restoring is the riskiest part, so proving it works on
+    # one or two files before doing hundreds is worth the extra run.
+    $targets = Select-ToolkitBatch -Items $targets -Noun 'deleted file' -Limit $BatchLimit
 
     $totalBytes = ($targets | Measure-Object -Property Size -Sum).Sum
     if (-not $totalBytes) { $totalBytes = 0 }

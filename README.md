@@ -138,8 +138,15 @@ naming shapes:
 
 - `filename (1).ext`, `filename (2).ext` …
 - `filename-Copy.ext`, `filename - Copy.ext`
+- `filename copy.ext`, `filename copy 2.ext`, `filename copy (3).ext`
 - `filename (user's conflicted copy 2026-04-02).ext`
 - `filename-PCNAME.ext` and `filename-user-PCNAME.ext`
+
+The space-separated `filename copy.ext` form is treated as a conflict only when
+the file it would be a copy *of* exists beside it, because plenty of legitimate
+documents genuinely end in that word — `Certified copy.pdf` is a real filename,
+not debris. The dashed `- Copy` form needs no such check. That rule also means
+the last surviving version of something is never written off as a duplicate.
 
 Candidates are grouped around the file they were copied from and classified:
 
@@ -296,6 +303,11 @@ Reached two ways:
 You choose what to download: everything flagged (the default — the archive is the
 safety net, so breadth is the point), or only the hash-verified exact duplicates.
 
+**Trial runs.** Before it starts, the stage offers to process just the first one
+or two files so you can check the result and then re-run for the rest — nothing
+is skipped permanently. Option 7 offers the same, since restoring is the riskiest
+part of that flow. Both also take `-BatchLimit <n>` for scripted use.
+
 **The rule that makes deletion safe:** a copy is only ever eligible for deletion
 when it was **downloaded AND verified**. Verification is SHA256 against the
 drive's own hash where OneDrive exposes one, and a size match otherwise; the
@@ -383,7 +395,7 @@ disagree about what counts as duplicate noise.
 pwsh ./OneDriveRepairToolkit/tests/Invoke-ToolkitTests.ps1
 ```
 
-112 assertions covering the conflict-pattern matching, duplicate grouping and
+129 assertions covering the conflict-pattern matching, duplicate grouping and
 classification, the archive-then-delete gate, recycle bin classification and
 restore ordering, path safety, config round-tripping, and a full stage 4
 comparison run against throwaway folders on disk. The SharePoint JWT client

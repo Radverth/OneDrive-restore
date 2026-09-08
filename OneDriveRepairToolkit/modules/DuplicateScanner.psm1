@@ -552,7 +552,8 @@ function Invoke-DuplicateArchive {
     param(
         [Parameter(Mandatory)][string]$UserId,
         [Parameter(Mandatory)][AllowEmptyCollection()]$Rows,
-        [string]$Destination
+        [string]$Destination,
+        [int]$BatchLimit = 0
     )
 
     if ($Rows.Count -eq 0) {
@@ -587,6 +588,9 @@ function Invoke-DuplicateArchive {
         Write-ToolkitLog 'Nothing matches that selection.' -Level WARN
         return $null
     }
+
+    # Offer a trial batch before committing to hundreds of downloads and deletions.
+    $targets = Select-ToolkitBatch -Items $targets -Noun 'sync error file' -Limit $BatchLimit
 
     $totalBytes = [int64]0
     foreach ($row in $targets) {

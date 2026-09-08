@@ -370,6 +370,55 @@ function Confirm-ToolkitAction {
     }
 }
 
+function Select-ToolkitBatch {
+    <#
+    .SYNOPSIS
+        Optionally narrows a work list to a small trial batch.
+
+    .DESCRIPTION
+        Lets an operator run one or two files through a long or irreversible stage,
+        check the result, and only then commit to the rest. Returns the whole list
+        unchanged when they ask for all of it.
+
+    .OUTPUTS
+        The selected items, always as an array.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()]$Items,
+        [string]$Noun = 'file',
+        [int]$Limit = 0,
+        [switch]$NoPrompt
+    )
+
+    $all = @($Items)
+    if ($all.Count -eq 0) { return ,@() }
+
+    if ($Limit -le 0 -and -not $NoPrompt) {
+        Write-Host ''
+        Write-Host ('  TRIAL RUN: you can do one or two {0}s first, check the result, then' -f $Noun) -ForegroundColor Cyan
+        Write-Host '  run this option again to do the rest. Nothing is skipped permanently.' -ForegroundColor Gray
+        $answer = Read-ToolkitValue -Prompt ('How many {0}s this run? (a number, or ALL for all {1})' -f $Noun, $all.Count) -Default 'ALL'
+
+        if ($answer -notmatch '^(?i)all$') {
+            $parsed = 0
+            if ([int]::TryParse($answer, [ref]$parsed) -and $parsed -gt 0) {
+                $Limit = $parsed
+            }
+            else {
+                Write-Host ('  "{0}" is not a number - doing all {1}.' -f $answer, $all.Count) -ForegroundColor Yellow
+            }
+        }
+    }
+
+    if ($Limit -gt 0 -and $Limit -lt $all.Count) {
+        Write-ToolkitLog ('Trial run: taking the first {0} of {1} {2}(s). Re-run for the rest.' -f $Limit, $all.Count, $Noun) -Level WARN
+        return ,@($all | Select-Object -First $Limit)
+    }
+
+    return ,$all
+}
+
 function Read-ToolkitDirectory {
     <#
     .SYNOPSIS
@@ -1038,6 +1087,12 @@ function Get-ConflictNameInfo {
     $patterns = @(
         @{ Type = 'ConflictedCopy'; Confidence = 'High';   Regex = '^(?<base>.+?)[\s_-]*\((?<marker>[^)]*conflicted copy[^)]*)\)\s*$' }
         @{ Type = 'CopySuffix';     Confidence = 'High';   Regex = '^(?<base>.+?)\s*[-_]\s*(?<marker>Copy(?:\s*\(\d{1,4}\))?)\s*$' }
+        # "report copy.docx" / "report copy 2.docx" - the space-separated form, with
+        # no dash. Medium, because plenty of legitimate documents genuinely end in
+        # the word copy ("Certified copy.pdf"), so this only counts as a conflict
+        # when the file it would be a copy OF actually exists beside it. That also
+        # means the last remaining version of something is never treated as debris.
+        @{ Type = 'CopyWordSuffix'; Confidence = 'Medium'; Regex = '^(?<base>.+?)\s+(?<marker>copy(?:\s*\(?\d{1,4}\)?)?)\s*$' }
         @{ Type = 'NumberedCopy';   Confidence = 'High';   Regex = '^(?<base>.+?)\s*\((?<marker>\d{1,4})\)\s*$' }
         @{ Type = 'UserMachineSuffix'; Confidence = 'Medium'; Regex = '^(?<base>.+?)-(?<marker>[A-Za-z0-9._'']+-[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*)$' }
         @{ Type = 'MachineSuffix';  Confidence = 'Medium'; Regex = '^(?<base>.+?)-(?<marker>[A-Za-z0-9][A-Za-z0-9]*(?:-[A-Za-z0-9]+)*)$' }
@@ -1094,6 +1149,7 @@ Export-ModuleMember -Function @(
     'Write-ToolkitHeader'
     'Read-ToolkitValue'
     'Confirm-ToolkitAction'
+    'Select-ToolkitBatch'
     'Read-ToolkitDirectory'
     'Read-ToolkitDateTime'
     'Format-ByteSize'

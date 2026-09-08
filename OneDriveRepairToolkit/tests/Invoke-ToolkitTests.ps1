@@ -95,6 +95,26 @@ Assert-That -Name 'copy suffix is a candidate'          -Actual $copy.IsCandidat
 Assert-That -Name 'copy suffix base name'               -Actual $copy.BaseName    -Expected 'Plan.docx'
 Assert-That -Name 'copy suffix pattern type'            -Actual $copy.PatternType -Expected 'CopySuffix'
 
+$wordCopy = Get-ConflictNameInfo -Name 'Plan copy.docx'
+Assert-That -Name 'a space-separated "copy" suffix is a candidate' -Actual $wordCopy.IsCandidate -Expected $true
+Assert-That -Name 'space-separated copy base name'                -Actual $wordCopy.BaseName    -Expected 'Plan.docx'
+Assert-That -Name 'space-separated copy pattern type'             -Actual $wordCopy.PatternType -Expected 'CopyWordSuffix'
+Assert-That -Name 'space-separated copy needs the original present' -Actual $wordCopy.RequiresOriginal -Expected $true
+
+$wordCopyNumbered = Get-ConflictNameInfo -Name 'Plan copy 2.docx'
+Assert-That -Name 'a numbered "copy 2" suffix is a candidate' -Actual $wordCopyNumbered.IsCandidate -Expected $true
+Assert-That -Name 'numbered "copy 2" base name'               -Actual $wordCopyNumbered.BaseName    -Expected 'Plan.docx'
+
+$wordCopyParens = Get-ConflictNameInfo -Name 'Plan copy (3).docx'
+Assert-That -Name '"copy (3)" base name' -Actual $wordCopyParens.BaseName -Expected 'Plan.docx'
+
+$dashCopyStillHigh = Get-ConflictNameInfo -Name 'Plan - Copy.docx'
+Assert-That -Name 'the dashed "- Copy" form stays high confidence' -Actual $dashCopyStillHigh.Confidence -Expected 'High'
+
+$legitCopy = Get-ConflictNameInfo -Name 'Certified copy.pdf'
+Assert-That -Name 'a legitimate "... copy" name still needs its original' `
+    -Actual $legitCopy.RequiresOriginal -Expected $true
+
 $conflicted = Get-ConflictNameInfo -Name "Notes (tom's conflicted copy 2026-04-02).md"
 Assert-That -Name 'conflicted copy is a candidate'      -Actual $conflicted.IsCandidate -Expected $true
 Assert-That -Name 'conflicted copy base name'           -Actual $conflicted.BaseName    -Expected 'Notes.md'
@@ -156,6 +176,8 @@ $catalogue = @(
     New-CatalogueEntry -Path 'Docs/orphan (2).txt'                  -Size 100  -Hash 'EEE' -Created '2026-01-07T00:00:00Z'
     New-CatalogueEntry -Path 'Docs/orphan (3).txt'                  -Size 100  -Hash 'EEE' -Created '2026-01-08T00:00:00Z'
     New-CatalogueEntry -Path 'Docs/lonely (1).txt'                  -Size 300  -Hash 'FFF' -Created '2026-01-09T00:00:00Z'
+    New-CatalogueEntry -Path 'Docs/Statement copy.pdf'              -Size 500  -Hash 'DDD' -Created '2026-01-10T00:00:00Z'
+    New-CatalogueEntry -Path 'Docs/Certified copy.pdf'              -Size 700  -Hash 'GGG' -Created '2026-01-11T00:00:00Z'
 )
 
 $groups = Find-ConflictGroup -Catalogue $catalogue
@@ -174,14 +196,20 @@ Assert-That -Name 'ordinary file is not reported' `
     -Actual (@($rows | Where-Object { $_.DuplicatePath -eq 'Docs/Statement.pdf' }).Count) -Expected 0
 Assert-That -Name 'orphaned copies group with the oldest kept as canonical' `
     -Actual (@($exact | Where-Object { $_.DuplicatePath -eq 'Docs/orphan (3).txt' -and $_.CanonicalPath -eq 'Docs/orphan (2).txt' }).Count) -Expected 1
+# 1000 (report-DESKTOP) + 100 (orphan (3)) + 500 (Statement copy) = 1600.
 Assert-That -Name 'reclaimable bytes counted only for exact duplicates' `
-    -Actual (($exact | Measure-Object -Property RecoverableBytes -Sum).Sum) -Expected 1100
+    -Actual (($exact | Measure-Object -Property RecoverableBytes -Sum).Sum) -Expected 1600
 
 $orphaned = @($rows | Where-Object { $_.Classification -eq 'OrphanedCopy' })
 Assert-That -Name 'a copy with no original and no siblings is flagged, not dropped' `
     -Actual (@($orphaned | Where-Object { $_.DuplicatePath -eq 'Docs/lonely (1).txt' }).Count) -Expected 1
 Assert-That -Name 'an orphaned copy is never counted as reclaimable' `
     -Actual (($orphaned | Measure-Object -Property RecoverableBytes -Sum).Sum) -Expected 0
+
+Assert-That -Name '"Statement copy.pdf" is caught, since Statement.pdf is beside it' `
+    -Actual (@($exact | Where-Object { $_.DuplicatePath -eq 'Docs/Statement copy.pdf' }).Count) -Expected 1
+Assert-That -Name '"Certified copy.pdf" is left alone - no "Certified.pdf" exists' `
+    -Actual (@($rows | Where-Object { $_.DuplicatePath -eq 'Docs/Certified copy.pdf' }).Count) -Expected 0
 
 # The originals must never appear anywhere in the scan output. Everything
 # downstream - the archive, the pending-delete list, the deletion itself - is
@@ -517,6 +545,23 @@ Assert-Throws -Name 'a CSV without the expected columns is rejected' `
     -Action { Import-DuplicateScanReport -Path $notAReport }
 Assert-Throws -Name 'a missing report path is rejected' `
     -Action { Import-DuplicateScanReport -Path (Join-Path $sandbox 'nope.csv') }
+
+Write-Host ''
+Write-Host 'Trial batch selection' -ForegroundColor Cyan
+
+$tenItems = 1..10
+Assert-That -Name 'a limit of 2 takes exactly two items' `
+    -Actual (Select-ToolkitBatch -Items $tenItems -Limit 2 -NoPrompt).Count -Expected 2
+Assert-That -Name 'a trial batch takes them from the front, in order' `
+    -Actual ((Select-ToolkitBatch -Items $tenItems -Limit 2 -NoPrompt) -join ',') -Expected '1,2'
+Assert-That -Name 'no limit means everything' `
+    -Actual (Select-ToolkitBatch -Items $tenItems -Limit 0 -NoPrompt).Count -Expected 10
+Assert-That -Name 'a limit larger than the list means everything' `
+    -Actual (Select-ToolkitBatch -Items $tenItems -Limit 99 -NoPrompt).Count -Expected 10
+Assert-That -Name 'a limit of 1 is allowed' `
+    -Actual (Select-ToolkitBatch -Items $tenItems -Limit 1 -NoPrompt).Count -Expected 1
+Assert-That -Name 'an empty list stays an empty array, not null' `
+    -Actual (Select-ToolkitBatch -Items @() -Limit 2 -NoPrompt).Count -Expected 0
 
 Write-Host ''
 Write-Host 'Menu readiness hints' -ForegroundColor Cyan
