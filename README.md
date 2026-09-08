@@ -317,7 +317,17 @@ Deletion is further restricted to `ExactDuplicate` rows and still needs a
 confirm plus typing `DELETE`, so a verified `ContentConflict` or `OrphanedCopy`
 is archived but never auto-deleted.
 
-**Before the delete prompt** the toolkit writes `pending-delete-<timestamp>.csv`
+**Two CSVs, two prompts.** The download set and the delete set are different —
+everything you chose gets downloaded, but only verified exact duplicates are
+offered for deletion — so each gets its own list, written before its own prompt.
+
+`pending-download-<timestamp>.csv` is written before the first byte is fetched.
+It is narrower than option 3's scan report, because the classification choice and
+any trial batch limit have already been applied, so it is the only accurate list
+of what this run will touch. An `EligibleForDeletion` column flags which rows
+could later be deleted.
+
+**Before the delete prompt** the toolkit then writes `pending-delete-<timestamp>.csv`
 listing exactly the files it would remove — one row per file, naming the copy and
 the original it is a copy of, its size, how it was verified, and where the backup
 landed. The prompt points at that path and waits. Whatever is in that file is

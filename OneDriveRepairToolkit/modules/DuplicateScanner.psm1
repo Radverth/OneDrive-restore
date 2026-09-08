@@ -624,6 +624,27 @@ function Invoke-DuplicateArchive {
         }
     }
 
+    # The exact download set, on disk before the first byte is fetched. This is
+    # narrower than option 3's scan report - the classification choice and any
+    # trial batch limit have already been applied - so it is the only accurate
+    # file-level list of what this run will touch.
+    $plannedPath = Get-ToolkitReportPath -BaseName 'pending-download' -Extension 'csv'
+    $targets |
+        Select-Object @{N = 'FileToDownload'; E = { $_.DuplicatePath }},
+                      @{N = 'CopyOfThisFile'; E = { $_.CanonicalPath }},
+                      @{N = 'SizeBytes'; E = { $_.DuplicateSize }},
+                      @{N = 'Classification'; E = { $_.Classification }},
+                      @{N = 'EligibleForDeletion'; E = { $_.Classification -eq 'ExactDuplicate' }},
+                      @{N = 'WillSaveTo'; E = { Join-Path $archiveRoot ($_.DuplicatePath -replace '/', [System.IO.Path]::DirectorySeparatorChar) }} |
+        Export-Csv -LiteralPath $plannedPath -NoTypeInformation -Encoding utf8
+    Copy-Item -LiteralPath $plannedPath -Destination (Join-Path $archiveRoot '_pending-download.csv') -Force -ErrorAction SilentlyContinue
+
+    Write-Host ''
+    Write-Host '  THE EXACT LIST OF FILES THAT WOULD BE DOWNLOADED IS HERE:' -ForegroundColor Yellow
+    Write-Host ('    {0}' -f $plannedPath) -ForegroundColor Yellow
+    Write-Host '  EligibleForDeletion marks the ones that could be deleted afterwards -' -ForegroundColor Gray
+    Write-Host '  you get a second list, and a second prompt, before anything is deleted.' -ForegroundColor Gray
+
     Write-Host ''
     if (-not (Confirm-ToolkitAction -Prompt ('Download these {0} copies now?' -f $targets.Count) -DefaultYes)) {
         Write-ToolkitLog 'Archive cancelled; nothing was downloaded or deleted.' -Level WARN
