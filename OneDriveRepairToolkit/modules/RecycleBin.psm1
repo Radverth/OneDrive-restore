@@ -766,7 +766,9 @@ function Select-RecycleBinDownloadTarget {
         if ($keep) { $item }
     }
 
-    return @($selected | Sort-Object `
+    # Leading comma so an empty selection stays an empty array rather than being
+    # unrolled to nothing, which would make the caller's .Count throw.
+    return ,@($selected | Sort-Object `
         @{ Expression = { if ($_.ItemType -eq 5) { 0 } else { 1 } } },
         @{ Expression = { @($_.RelativePath -split '/').Count } },
         @{ Expression = { $_.RelativePath } })

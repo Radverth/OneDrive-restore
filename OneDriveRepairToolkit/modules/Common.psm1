@@ -175,6 +175,8 @@ function New-ToolkitConfigObject {
         LastRecycleBinReportPath = ''
         RecycleBinDownloadPath   = ''
         LastRecycleBinDownloadPath = ''
+        DuplicateArchivePath     = ''
+        LastDuplicateArchivePath = ''
         LastReconcileReportPath  = ''
         LogRetentionDays         = 30
         UpdatedUtc               = ''

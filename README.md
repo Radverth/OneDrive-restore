@@ -16,6 +16,7 @@ automates:
 | 5 | Upload only the legitimate recovered work | Menu option 5 |
 | — | Inventory the recycle bin to see what was deleted | Menu option 6 (optional, any time) |
 | — | Download the recycle bin's contents | Menu option 7 (optional, any time) |
+| — | Archive the duplicate copies to a USB drive, then optionally delete | Menu option 8 (optional, any time) |
 
 The rollback in step 0 also wipes any genuine files and edits made between the
 restore point and now. Steps 2-5 exist to find that work in a local backup of
@@ -260,6 +261,43 @@ visible rather than silently left consuming quota.
 > fails if something already occupies the original path — that is reported per
 > item and the run continues.
 
+### 8. Archive duplicate copies — download, then optionally delete (optional)
+
+Downloads every copy the scanner flagged to a local folder (a USB drive is the
+point), verifies each one landed intact, writes a CSV manifest, and only then
+offers to delete the verified ones from OneDrive.
+
+This is the answer to "I want something I can restore from if this goes wrong."
+Deleting straight from the drive leaves the OneDrive recycle bin as the only way
+back — on a retention clock, in the tenant that just had the problem. An offline
+archive has neither of those constraints.
+
+Reached two ways:
+
+- **From option 3**, as the recommended next step once the scan finishes.
+- **As option 8**, against the last scan report or any previous
+  `duplicate-scan-<timestamp>.csv` — so you can scan now and archive later.
+
+You choose what to download: everything flagged (the default — the archive is the
+safety net, so breadth is the point), or only the hash-verified exact duplicates.
+
+**The rule that makes deletion safe:** a copy is only ever eligible for deletion
+when it was **downloaded AND verified**. Verification is SHA256 against the
+drive's own hash where OneDrive exposes one, and a size match otherwise; the
+manifest records which was used per file. Anything that failed to transfer, came
+down the wrong size, or mismatched its hash is silently excluded from the
+deletion list — a failed backup can never result in the cloud copy being removed.
+Deletion is further restricted to `ExactDuplicate` rows and still needs a
+confirm plus typing `DELETE`, so a verified `ContentConflict` or `OrphanedCopy`
+is archived but never auto-deleted.
+
+The archive keeps each file at its **original relative path**, so restoring means
+either copying files back by hand, or pointing stage 4 at the archive folder as
+the local backup root and letting stage 5 upload. The manifest is written twice —
+into `reports/`, and as `_archive-manifest.csv` inside the archive folder, so the
+USB stick explains itself. Every row carries `DownloadStatus`, `VerifyStatus`,
+`Sha256`, `DeleteStatus`, and the `CanonicalPath` each copy was a copy of.
+
 ## Safety rules baked into the design
 
 - **No blind re-upload of the backup.** Only files proven newer than the restore
@@ -268,6 +306,9 @@ visible rather than silently left consuming quota.
   one side or the other, silently.
 - **Deletion is never automatic**, never inferred from a filename alone, and
   never applied to anything that was not hash-verified as an exact duplicate.
+- **A copy can only be deleted once a verified local backup of it exists** (when
+  deleting through option 8). A failed or truncated download excludes that file
+  from deletion entirely.
 - **A conflict-named file whose original exists nowhere is never discarded.**
   `report (1).docx` with no `report.docx` on either side may be the only copy of
   real work, so it is surfaced for review instead of being written off as noise.
@@ -287,7 +328,7 @@ OneDriveRepairToolkit/
 │   ├── Common.psm1                 # config, logging, Graph auth + retry, shared patterns
 │   ├── AppRegistration.psm1        # stage 1
 │   ├── DownloadOneDrive.psm1       # stage 2
-│   ├── DuplicateScanner.psm1       # stage 3
+│   ├── DuplicateScanner.psm1       # stage 3 + duplicate archive (option 8)
 │   ├── CompareDrives.psm1          # stage 4
 │   ├── ReconcileUpload.psm1        # stage 5
 │   └── RecycleBin.psm1             # recycle bin inventory + download (options 6-7)
@@ -311,13 +352,13 @@ disagree about what counts as duplicate noise.
 pwsh ./OneDriveRepairToolkit/tests/Invoke-ToolkitTests.ps1
 ```
 
-83 assertions covering the conflict-pattern matching, duplicate grouping and
-classification, recycle bin classification and restore ordering, path safety,
-config round-tripping, and a full stage 4 comparison run against throwaway
-folders on disk. The SharePoint JWT client assertion is signed with a
-generated certificate and its signature verified against the public key — the
-same check Entra performs — including a negative case proving a tampered
-assertion fails. No tenant, no Graph modules,
+96 assertions covering the conflict-pattern matching, duplicate grouping and
+classification, the archive-then-delete gate, recycle bin classification and
+restore ordering, path safety, config round-tripping, and a full stage 4
+comparison run against throwaway folders on disk. The SharePoint JWT client
+assertion is signed with a generated certificate and its signature verified
+against the public key — the same check Entra performs — including a negative
+case proving a tampered assertion fails. No tenant, no Graph modules,
 no network — it runs anywhere PowerShell 7 does.
 
 ## Troubleshooting

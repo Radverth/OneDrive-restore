@@ -442,6 +442,63 @@ $publicKey.Dispose()
 $rsaKey.Dispose()
 
 Write-Host ''
+Write-Host 'Duplicate archive - selection and the delete gate' -ForegroundColor Cyan
+
+$scanRows = @(
+    [pscustomobject]@{ Classification = 'ExactDuplicate';    DuplicatePath = 'a.txt'; DuplicateItemId = '1'; DuplicateSize = 10 }
+    [pscustomobject]@{ Classification = 'ProbableDuplicate'; DuplicatePath = 'b.txt'; DuplicateItemId = '2'; DuplicateSize = 20 }
+    [pscustomobject]@{ Classification = 'ContentConflict';   DuplicatePath = 'c.txt'; DuplicateItemId = '3'; DuplicateSize = 30 }
+    [pscustomobject]@{ Classification = 'OrphanedCopy';      DuplicatePath = 'd.txt'; DuplicateItemId = '4'; DuplicateSize = 40 }
+)
+
+Assert-That -Name 'archiving everything selects all flagged copies' `
+    -Actual (Select-DuplicateArchiveRow -Rows $scanRows).Count -Expected 4
+Assert-That -Name 'archiving exact duplicates only narrows the selection' `
+    -Actual (Select-DuplicateArchiveRow -Rows $scanRows -Classification @('ExactDuplicate')).Count -Expected 1
+
+# The safety invariant: only verified AND eligible copies may ever be deleted.
+$archiveResults = @(
+    [pscustomobject]@{ Classification = 'ExactDuplicate';    DuplicatePath = 'ok-sha.txt';    VerifyStatus = 'Sha256Matched' }
+    [pscustomobject]@{ Classification = 'ExactDuplicate';    DuplicatePath = 'ok-size.txt';   VerifyStatus = 'SizeMatched' }
+    [pscustomobject]@{ Classification = 'ExactDuplicate';    DuplicatePath = 'bad-hash.txt';  VerifyStatus = 'Failed' }
+    [pscustomobject]@{ Classification = 'ExactDuplicate';    DuplicatePath = 'no-download.txt'; VerifyStatus = 'NotDownloaded' }
+    [pscustomobject]@{ Classification = 'ContentConflict';   DuplicatePath = 'conflict.txt';  VerifyStatus = 'Sha256Matched' }
+    [pscustomobject]@{ Classification = 'OrphanedCopy';      DuplicatePath = 'orphan.txt';    VerifyStatus = 'Sha256Matched' }
+)
+
+$deletable = Get-ArchiveDeletionCandidate -ArchiveResult $archiveResults
+Assert-That -Name 'only verified exact duplicates are offered for deletion' -Actual $deletable.Count -Expected 2
+Assert-That -Name 'a hash mismatch is never deletable' `
+    -Actual (@($deletable | Where-Object { $_.DuplicatePath -eq 'bad-hash.txt' }).Count) -Expected 0
+Assert-That -Name 'a copy that never downloaded is never deletable' `
+    -Actual (@($deletable | Where-Object { $_.DuplicatePath -eq 'no-download.txt' }).Count) -Expected 0
+Assert-That -Name 'a verified content conflict is still not auto-deletable' `
+    -Actual (@($deletable | Where-Object { $_.DuplicatePath -eq 'conflict.txt' }).Count) -Expected 0
+Assert-That -Name 'a verified orphaned copy is still not auto-deletable' `
+    -Actual (@($deletable | Where-Object { $_.DuplicatePath -eq 'orphan.txt' }).Count) -Expected 0
+Assert-That -Name 'size-verified copies count as verified' `
+    -Actual (@($deletable | Where-Object { $_.DuplicatePath -eq 'ok-size.txt' }).Count) -Expected 1
+
+$widened = Get-ArchiveDeletionCandidate -ArchiveResult $archiveResults -EligibleClassification @('ExactDuplicate', 'ContentConflict')
+Assert-That -Name 'widening eligibility still excludes anything unverified' -Actual $widened.Count -Expected 3
+
+Assert-That -Name 'an empty archive yields nothing to delete' `
+    -Actual (Get-ArchiveDeletionCandidate -ArchiveResult @()).Count -Expected 0
+
+# Round-tripping a scan report is how option 8 picks up a previous run.
+$scanReportPath = Join-Path $sandbox 'scan-report.csv'
+$scanRows | Export-Csv -LiteralPath $scanReportPath -NoTypeInformation -Encoding utf8
+Assert-That -Name 'a scan report round-trips back into rows' `
+    -Actual (Import-DuplicateScanReport -Path $scanReportPath).Count -Expected 4
+
+$notAReport = Join-Path $sandbox 'not-a-report.csv'
+@([pscustomobject]@{ Something = 'else' }) | Export-Csv -LiteralPath $notAReport -NoTypeInformation -Encoding utf8
+Assert-Throws -Name 'a CSV without the expected columns is rejected' `
+    -Action { Import-DuplicateScanReport -Path $notAReport }
+Assert-Throws -Name 'a missing report path is rejected' `
+    -Action { Import-DuplicateScanReport -Path (Join-Path $sandbox 'nope.csv') }
+
+Write-Host ''
 Write-Host 'Config round-trip' -ForegroundColor Cyan
 
 Set-ToolkitConfigValue -Name 'TargetUserId' -Value 'user@contoso.com' | Out-Null

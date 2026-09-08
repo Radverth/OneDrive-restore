@@ -15,6 +15,8 @@
 
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'Common.psm1') -DisableNameChecking
+# Invoke-DriveItemDownload is shared with stage 2 rather than reimplemented here.
+Import-Module (Join-Path $PSScriptRoot 'DownloadOneDrive.psm1') -DisableNameChecking
 
 function Compare-DriveItemContent {
     <#
@@ -416,13 +418,30 @@ function Invoke-DuplicateScan {
                                    @{N = 'Size'; E = { Format-ByteSize $_.DuplicateSize } } |
             Out-String | Write-Host
 
-        if ($Source -eq 'Cloud' -or (Confirm-ToolkitAction -Prompt 'Delete duplicates from the live drive? (needs a Graph connection)')) {
+        Write-Host ''
+        Write-Host '  What next?'
+        Write-Host '    1. Download the copies to a folder first, then choose whether to delete (recommended)'
+        Write-Host '    2. Delete the exact duplicates without keeping a local copy'
+        Write-Host '    3. Nothing - the reports are on disk'
+        Write-Host ''
+        $nextAction = Read-ToolkitValue -Prompt 'Choice' -Default '1'
+
+        if ($nextAction -eq '1' -or $nextAction -eq '2') {
+            if (-not $UserId) {
+                $UserId = Read-ToolkitValue -Prompt 'Target user (UPN or object ID)' -Default ([string]$config['TargetUserId'])
+            }
+        }
+
+        if ($nextAction -eq '1') {
+            if (Connect-ToolkitGraph) {
+                Invoke-DuplicateArchive -UserId $UserId -Rows $rows | Out-Null
+            }
+        }
+        elseif ($nextAction -eq '2') {
+            Write-ToolkitLog 'Deleting without a local archive - the OneDrive recycle bin will be the only way back.' -Level WARN
             if (Confirm-ToolkitAction -Prompt ('Delete these {0} exact duplicates from OneDrive to reclaim {1}?' -f $exact.Count, (Format-ByteSize $reclaimable))) {
                 $typed = Read-ToolkitValue -Prompt "Type DELETE in capitals to confirm" -AllowEmpty
                 if ($typed -ceq 'DELETE') {
-                    if (-not $UserId) {
-                        $UserId = Read-ToolkitValue -Prompt 'Target user (UPN or object ID)' -Default ([string]$config['TargetUserId'])
-                    }
                     if (Connect-ToolkitGraph) {
                         $result = Remove-DuplicateDriveItem -UserId $UserId -Rows $exact
                         $deletionPath = Get-ToolkitReportPath -BaseName 'duplicates-deleted' -Extension 'csv'
@@ -443,6 +462,9 @@ function Invoke-DuplicateScan {
                 Write-ToolkitLog 'Nothing deleted. The reports are on disk for review.' -Level INFO
             }
         }
+        else {
+            Write-ToolkitLog 'Nothing deleted. The reports are on disk for review.' -Level INFO
+        }
     }
 
     return [pscustomobject]@{
@@ -455,6 +477,393 @@ function Invoke-DuplicateScan {
     }
 }
 
+# ---------------------------------------------------------------------------
+# Archive the copies before deleting them
+# ---------------------------------------------------------------------------
+#
+# Deleting a duplicate straight from the drive leaves the OneDrive recycle bin as
+# the only way back, on a retention clock, in the same tenant that just had a
+# problem. Downloading each copy first gives an offline backup that can go on a
+# USB stick, and makes the deletion reversible by hand.
+#
+# The rule that makes this safe: a copy is only ever eligible for deletion when it
+# was downloaded AND verified. Anything that failed to transfer, or came down the
+# wrong size, is never put forward for deletion.
+
+$script:VerifiedStatus = @('Sha256Matched', 'SizeMatched')
+
+function Select-DuplicateArchiveRow {
+    <#
+    .SYNOPSIS
+        Filters scan rows down to the classifications the admin chose to archive.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()]$Rows,
+        [string[]]$Classification = @('ExactDuplicate', 'ProbableDuplicate', 'ContentConflict', 'OrphanedCopy')
+    )
+
+    # The leading comma keeps an empty result an empty array: a bare "return @()"
+    # is unrolled by the pipeline to nothing, and the caller's .Count then throws.
+    return ,@($Rows | Where-Object { $Classification -contains [string]$_.Classification })
+}
+
+function Get-ArchiveDeletionCandidate {
+    <#
+    .SYNOPSIS
+        Returns only the copies that are safe to delete: verified on disk AND eligible.
+
+    .DESCRIPTION
+        This is the gate the whole archive-then-delete flow rests on. A row reaches
+        it only if the download completed and the local file matched what the drive
+        said it should be, so a failed or truncated transfer can never result in the
+        cloud copy being removed.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][AllowEmptyCollection()]$ArchiveResult,
+        [string[]]$EligibleClassification = @('ExactDuplicate')
+    )
+
+    return ,@($ArchiveResult | Where-Object {
+        $script:VerifiedStatus -contains [string]$_.VerifyStatus -and
+        $EligibleClassification -contains [string]$_.Classification
+    })
+}
+
+function Invoke-DuplicateArchive {
+    <#
+    .SYNOPSIS
+        Downloads every flagged copy to a local folder, verifies it, then optionally
+        deletes the verified ones from OneDrive.
+    #>
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string]$UserId,
+        [Parameter(Mandatory)][AllowEmptyCollection()]$Rows,
+        [string]$Destination
+    )
+
+    if ($Rows.Count -eq 0) {
+        Write-ToolkitLog 'No duplicate rows to archive.' -Level WARN
+        return $null
+    }
+
+    $config = Get-ToolkitConfig
+
+    Write-Host ''
+    Write-ToolkitHeader 'Archive copies before deleting'
+    foreach ($name in @('ExactDuplicate', 'ProbableDuplicate', 'ContentConflict', 'OrphanedCopy')) {
+        $count = @($Rows | Where-Object { $_.Classification -eq $name }).Count
+        Write-Host ('  {0,-20}: {1}' -f $name, $count)
+    }
+
+    Write-Host ''
+    Write-Host '  Which copies should be downloaded?'
+    Write-Host '    1. Everything flagged (recommended - the archive is the safety net)'
+    Write-Host '    2. Only the hash-verified exact duplicates'
+    Write-Host ''
+    $scopeChoice = Read-ToolkitValue -Prompt 'Choice' -Default '1'
+    $classifications = if ($scopeChoice -eq '2') {
+        @('ExactDuplicate')
+    }
+    else {
+        @('ExactDuplicate', 'ProbableDuplicate', 'ContentConflict', 'OrphanedCopy')
+    }
+
+    $targets = Select-DuplicateArchiveRow -Rows $Rows -Classification $classifications
+    if ($targets.Count -eq 0) {
+        Write-ToolkitLog 'Nothing matches that selection.' -Level WARN
+        return $null
+    }
+
+    $totalBytes = [int64]0
+    foreach ($row in $targets) {
+        $size = [int64]0
+        if ([int64]::TryParse([string]$row.DuplicateSize, [ref]$size)) { $totalBytes += $size }
+    }
+
+    if (-not $Destination) {
+        $Destination = Read-ToolkitDirectory -Prompt 'Folder to archive the copies into (a USB drive is fine)' `
+            -Default ([string]$config['DuplicateArchivePath']) -CreateIfMissing
+    }
+    if (-not $Destination) {
+        Write-ToolkitLog 'No destination chosen; nothing was archived or deleted.' -Level WARN
+        return $null
+    }
+
+    Set-ToolkitConfigValue -Name 'DuplicateArchivePath' -Value $Destination | Out-Null
+    $archiveRoot = Join-Path $Destination ('duplicate-archive-{0}' -f (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    New-Item -ItemType Directory -Path $archiveRoot -Force | Out-Null
+
+    $freeSpace = Get-FreeDiskSpace -Path $archiveRoot
+    Write-Host ''
+    Write-Host ('  Copies to archive : {0}' -f $targets.Count)
+    Write-Host ('  Total size        : {0}' -f (Format-ByteSize $totalBytes))
+    Write-Host ('  Archive folder    : {0}' -f $archiveRoot)
+    if ($null -ne $freeSpace) {
+        Write-Host ('  Free space        : {0}' -f (Format-ByteSize $freeSpace))
+        if ($freeSpace -lt $totalBytes) {
+            Write-ToolkitLog 'There is not enough free space at the destination for the whole archive.' -Level WARN
+            if (-not (Confirm-ToolkitAction -Prompt 'Continue anyway?')) { return $null }
+        }
+    }
+
+    Write-Host ''
+    if (-not (Confirm-ToolkitAction -Prompt ('Download these {0} copies now?' -f $targets.Count) -DefaultYes)) {
+        Write-ToolkitLog 'Archive cancelled; nothing was downloaded or deleted.' -Level WARN
+        return $null
+    }
+
+    $results = [System.Collections.Generic.List[psobject]]::new()
+    $rowByPath = @{}
+    $downloaded = 0
+    $failed = 0
+    $bytesDone = [int64]0
+    $index = 0
+
+    foreach ($row in $targets) {
+        $index++
+        Write-Progress -Activity 'Archiving duplicate copies' -Id 1 `
+            -Status ('{0}/{1} - {2}' -f $index, $targets.Count, $row.DuplicatePath) `
+            -PercentComplete ([int](($index / [math]::Max($targets.Count, 1)) * 100))
+
+        $downloadStatus = 'Failed'
+        $verifyStatus = 'NotDownloaded'
+        $localPath = ''
+        $hash = $null
+        $detail = ''
+
+        try {
+            $parent = ConvertTo-NormalizedRelativePath -Path (Split-Path -Parent ([string]$row.DuplicatePath))
+            $item = Get-OneDriveItemById -UserId $UserId -ItemId ([string]$row.DuplicateItemId) -ParentPath $parent
+            if (-not $item) {
+                throw ('No longer in the drive (item {0})' -f $row.DuplicateItemId)
+            }
+
+            $localPath = Get-SafeLocalPath -Root $archiveRoot -RelativePath ([string]$row.DuplicatePath)
+            Invoke-DriveItemDownload -Item $item -TargetPath $localPath -UserId $UserId
+            $downloadStatus = 'Downloaded'
+            $downloaded++
+
+            # Verify the local copy before this row can ever be considered for
+            # deletion. SHA256 when the drive gives us one, size otherwise.
+            $localInfo = Get-Item -LiteralPath $localPath -ErrorAction Stop
+            $hash = Get-FileSha256 -Path $localPath
+
+            if (-not [string]::IsNullOrWhiteSpace($item.Sha256Hash) -and $hash) {
+                $verifyStatus = if ($hash -eq $item.Sha256Hash) { 'Sha256Matched' } else { 'Failed' }
+                if ($verifyStatus -eq 'Failed') { $detail = 'Downloaded file SHA256 does not match the drive' }
+            }
+            elseif ($localInfo.Length -eq $item.Size -and $localInfo.Length -ge 0) {
+                $verifyStatus = 'SizeMatched'
+                $detail = 'Verified by size; the drive exposed no SHA256 for this file'
+            }
+            else {
+                $verifyStatus = 'Failed'
+                $detail = 'Downloaded {0} bytes but the drive reports {1}' -f $localInfo.Length, $item.Size
+            }
+
+            $bytesDone += $localInfo.Length
+        }
+        catch {
+            $failed++
+            $detail = $_.Exception.Message
+            Write-ToolkitLog ('Archive FAILED {0}: {1}' -f $row.DuplicatePath, $detail) -Level ERROR -NoConsole
+        }
+
+        $result = [pscustomobject]@{
+            Classification  = [string]$row.Classification
+            DuplicatePath   = [string]$row.DuplicatePath
+            CanonicalPath   = [string]$row.CanonicalPath
+            SizeBytes       = [string]$row.DuplicateSize
+            DownloadStatus  = $downloadStatus
+            VerifyStatus    = $verifyStatus
+            LocalPath       = $localPath
+            Sha256          = $hash
+            DuplicateItemId = [string]$row.DuplicateItemId
+            DeleteStatus    = 'NotRequested'
+            Detail          = $detail
+        }
+        $results.Add($result)
+        $rowByPath[[string]$row.DuplicatePath] = $row
+    }
+
+    Write-Progress -Activity 'Archiving duplicate copies' -Id 1 -Completed
+
+    $verified = @($results | Where-Object { $script:VerifiedStatus -contains $_.VerifyStatus })
+
+    Write-Host ''
+    Write-ToolkitHeader 'Archive summary'
+    Write-Host ('  Downloaded : {0} ({1})' -f $downloaded, (Format-ByteSize $bytesDone)) -ForegroundColor Green
+    Write-Host ('  Verified   : {0}' -f $verified.Count) -ForegroundColor Green
+    Write-Host ('  Failed     : {0}' -f $failed) -ForegroundColor $(if ($failed -gt 0) { 'Red' } else { 'Gray' })
+    Write-Host ('  Folder     : {0}' -f $archiveRoot)
+
+    # Now the deletion offer, restricted to what is provably on disk.
+    $eligible = @('ExactDuplicate')
+    $candidates = Get-ArchiveDeletionCandidate -ArchiveResult $results -EligibleClassification $eligible
+
+    if ($candidates.Count -gt 0) {
+        Write-Host ''
+        Write-Host ('  {0} archived copy/copies are hash-verified exact duplicates and could now' -f $candidates.Count) -ForegroundColor Cyan
+        Write-Host '  be deleted from OneDrive. Everything else stays where it is.' -ForegroundColor Cyan
+
+        if ($failed -gt 0) {
+            Write-ToolkitLog ('{0} copy/copies failed to archive and are excluded from deletion.' -f $failed) -Level WARN
+        }
+
+        if (Confirm-ToolkitAction -Prompt ('Delete those {0} verified copies from OneDrive?' -f $candidates.Count)) {
+            $typed = Read-ToolkitValue -Prompt 'Type DELETE in capitals to confirm' -AllowEmpty
+            if ($typed -ceq 'DELETE') {
+                $toDelete = @()
+                foreach ($candidate in $candidates) {
+                    if ($rowByPath.ContainsKey($candidate.DuplicatePath)) { $toDelete += $rowByPath[$candidate.DuplicatePath] }
+                }
+
+                $deletion = Remove-DuplicateDriveItem -UserId $UserId -Rows $toDelete
+                $deletedPaths = @{}
+                foreach ($entry in $deletion.Results) {
+                    $deletedPaths[[string]$entry.DuplicatePath] = [string]$entry.Status
+                }
+                foreach ($result in $results) {
+                    if ($deletedPaths.ContainsKey($result.DuplicatePath)) {
+                        $result.DeleteStatus = $deletedPaths[$result.DuplicatePath]
+                    }
+                }
+
+                Write-Host ''
+                Write-ToolkitLog ('Deleted {0} copy/copies, reclaiming {1}. {2} failed.' -f
+                    $deletion.Deleted, (Format-ByteSize $deletion.Reclaimed), $deletion.Failed) `
+                    -Level $(if ($deletion.Failed -gt 0) { 'WARN' } else { 'SUCCESS' })
+                Write-ToolkitLog 'Deleted items also go to the OneDrive recycle bin, so there are now two ways back.' -Level INFO
+            }
+            else {
+                Write-ToolkitLog 'Confirmation not matched; nothing was deleted.' -Level WARN
+            }
+        }
+        else {
+            Write-ToolkitLog 'Nothing deleted. The archive is on disk either way.' -Level INFO
+        }
+    }
+    elseif ($results.Count -gt 0) {
+        Write-Host ''
+        Write-ToolkitLog 'No archived copy is both hash-verified and classified as an exact duplicate, so nothing is offered for deletion.' -Level INFO
+    }
+
+    # The manifest lives with the archive so the USB copy explains itself, and in
+    # reports/ so the run is recorded alongside everything else.
+    $manifestPath = Get-ToolkitReportPath -BaseName 'duplicate-archive' -Extension 'csv'
+    $results | Export-Csv -LiteralPath $manifestPath -NoTypeInformation -Encoding utf8
+    $results | Export-Csv -LiteralPath (Join-Path $archiveRoot '_archive-manifest.csv') -NoTypeInformation -Encoding utf8
+    Set-ToolkitConfigValue -Name 'LastDuplicateArchivePath' -Value $manifestPath | Out-Null
+
+    Write-Host ''
+    Write-Host ('  Manifest   : {0}' -f $manifestPath)
+    Write-Host ('  Also saved : {0}' -f (Join-Path $archiveRoot '_archive-manifest.csv'))
+    Write-Host ''
+    Write-Host '  To restore later: the archive keeps each file at its original relative' -ForegroundColor DarkGray
+    Write-Host '  path, so the folder can be pointed at as the local backup in stage 4,' -ForegroundColor DarkGray
+    Write-Host '  or the files copied back by hand.' -ForegroundColor DarkGray
+
+    Write-ToolkitLog ('Duplicate archive complete: {0} downloaded, {1} verified, {2} failed, manifest at {3}.' -f
+        $downloaded, $verified.Count, $failed, $manifestPath) -Level SUCCESS -NoConsole
+
+    return [pscustomobject]@{
+        ArchiveRoot  = $archiveRoot
+        ManifestPath = $manifestPath
+        Downloaded   = $downloaded
+        Verified     = $verified.Count
+        Failed       = $failed
+        Deleted      = @($results | Where-Object { $_.DeleteStatus -eq 'Deleted' }).Count
+        Results      = $results
+    }
+}
+
+function Import-DuplicateScanReport {
+    <#
+    .SYNOPSIS
+        Reads a previous duplicate-scan CSV back into scan rows.
+    #>
+    [CmdletBinding()]
+    param([Parameter(Mandatory)][string]$Path)
+
+    if (-not (Test-Path -LiteralPath $Path)) {
+        throw ('Duplicate scan report not found: {0}' -f $Path)
+    }
+
+    $rows = @(Import-Csv -LiteralPath $Path)
+    $required = @('Classification', 'DuplicatePath', 'DuplicateItemId')
+    if ($rows.Count -gt 0) {
+        foreach ($column in $required) {
+            if (-not $rows[0].PSObject.Properties[$column]) {
+                throw ('{0} is missing the {1} column, so it is not a duplicate scan report.' -f $Path, $column)
+            }
+        }
+    }
+    return $rows
+}
+
+function Invoke-DuplicateArchiveFromReport {
+    <#
+    .SYNOPSIS
+        Menu option 8 - archive (and optionally delete) copies using a scan report.
+    #>
+    [CmdletBinding()]
+    param(
+        [string]$UserId,
+        [string]$ReportPath
+    )
+
+    Write-ToolkitHeader 'Archive Duplicate Copies - Download, then Optionally Delete'
+
+    # Fail fast like the other stages, rather than asking for a report first and
+    # only then discovering there is no way to reach the drive.
+    if (-not (Test-ToolkitPrerequisite)) { return $null }
+
+    $config = Get-ToolkitConfig
+
+    if (-not $ReportPath) {
+        Write-Host ''
+        Write-Host '  1. Use the last duplicate scan report'
+        Write-Host '  2. Use a different scan report CSV'
+        Write-Host '  3. Run a fresh scan first (menu option 3)'
+        Write-Host ''
+        $choice = Read-ToolkitValue -Prompt 'Choice' -Default '1'
+
+        if ($choice -eq '3') {
+            Write-ToolkitLog 'Run menu option 3 to produce a scan report, then come back here.' -Level INFO
+            return $null
+        }
+
+        $ReportPath = Read-ToolkitValue -Prompt 'Duplicate scan report (CSV)' -Default ([string]$config['LastDuplicateReportPath'])
+    }
+
+    try {
+        $rows = Import-DuplicateScanReport -Path $ReportPath
+    }
+    catch {
+        Write-ToolkitLog $_.Exception.Message -Level ERROR
+        return $null
+    }
+
+    if ($rows.Count -eq 0) {
+        Write-ToolkitLog 'That report contains no rows - the scan found no copies.' -Level SUCCESS
+        return $null
+    }
+
+    Write-ToolkitLog ('Loaded {0} flagged copy/copies from {1}.' -f $rows.Count, $ReportPath) -Level INFO
+
+    if (-not (Connect-ToolkitGraph)) { return $null }
+
+    if (-not $UserId) {
+        $UserId = Read-ToolkitValue -Prompt 'Target user (UPN or object ID)' -Default ([string]$config['TargetUserId'])
+    }
+    Set-ToolkitConfigValue -Name 'TargetUserId' -Value $UserId | Out-Null
+
+    return (Invoke-DuplicateArchive -UserId $UserId -Rows $rows)
+}
+
 Export-ModuleMember -Function @(
     'Invoke-DuplicateScan'
     'Get-DriveFileCatalogue'
@@ -462,4 +871,9 @@ Export-ModuleMember -Function @(
     'ConvertTo-DuplicateReportRow'
     'Compare-DriveItemContent'
     'Remove-DuplicateDriveItem'
+    'Invoke-DuplicateArchive'
+    'Invoke-DuplicateArchiveFromReport'
+    'Import-DuplicateScanReport'
+    'Select-DuplicateArchiveRow'
+    'Get-ArchiveDeletionCandidate'
 )
