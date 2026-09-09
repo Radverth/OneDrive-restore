@@ -745,9 +745,25 @@ function Invoke-DuplicateArchive {
     Set-ToolkitConfigValue -Name 'LastDuplicateArchivePath' -Value $manifestPath | Out-Null
     Write-Host ('  Manifest   : {0}' -f $manifestPath)
 
-    # Now the deletion offer, restricted to what is provably on disk.
+    # Now the deletion offer, restricted to what is provably on disk. Only
+    # ExactDuplicate is ever eligible: anything that landed in the stage 3
+    # needs-review report is archived but never put forward for deletion.
     $eligible = @('ExactDuplicate')
     $candidates = Get-ArchiveDeletionCandidate -ArchiveResult $results -EligibleClassification $eligible
+
+    # Say out loud what is being held back, so "everything else" is not left vague.
+    $heldBack = @($results | Where-Object { $eligible -notcontains $_.Classification })
+    if ($heldBack.Count -gt 0) {
+        Write-Host ''
+        Write-Host ('  {0} archived file(s) are NOT up for deletion and stay in OneDrive:' -f $heldBack.Count) -ForegroundColor Green
+        foreach ($name in @('ProbableDuplicate', 'ContentConflict', 'OrphanedCopy')) {
+            $count = @($heldBack | Where-Object { $_.Classification -eq $name }).Count
+            if ($count -gt 0) {
+                Write-Host ('    {0,-20} {1,5}   (from conflicts-needs-review)' -f $name, $count) -ForegroundColor Green
+            }
+        }
+        Write-Host '  These are backed up to your folder, but only ever deleted by hand.' -ForegroundColor Gray
+    }
 
     if ($candidates.Count -gt 0) {
         # Exactly what would be deleted, on disk and reviewable BEFORE the prompt.
@@ -889,6 +905,10 @@ function Invoke-DuplicateArchiveFromReport {
     Write-Host '  Only after that does it offer to delete them from OneDrive - and only' -ForegroundColor Gray
     Write-Host '  the ones it could verify. A copy that failed to download is never' -ForegroundColor Gray
     Write-Host '  deleted, so you always keep something to restore from.' -ForegroundColor Gray
+    Write-Host ''
+    Write-Host '  Anything in conflicts-needs-review from stage 3 is BACKED UP BUT NEVER' -ForegroundColor Green
+    Write-Host '  DELETED here. Only hash-verified exact duplicates can be deleted, so' -ForegroundColor Green
+    Write-Host '  same-name-different-content files and copies with no original survive.' -ForegroundColor Green
 
     # Fail fast like the other stages, rather than asking for a report first and
     # only then discovering there is no way to reach the drive.
